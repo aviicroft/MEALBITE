@@ -25,6 +25,7 @@ model Meal {
   date         DateTime
   type         String      // BREAKFAST, LUNCH, SNACKS, DINNER
   menu         String
+  availability String      @default("AVAILABLE") // AVAILABLE, FINISHED
   bookingOpen  DateTime
   bookingClose DateTime
   createdAt    DateTime    @default(now())

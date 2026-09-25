@@ -162,7 +162,11 @@ export default async function StudentDashboardPage() {
                 <span className="font-bold text-sm text-slate-900">
                   {meal.type} Service
                 </span>
-                {meal.hasBooked ? (
+                {meal.availability === "FINISHED" ? (
+                  <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
+                    FINISHED
+                  </span>
+                ) : meal.hasBooked ? (
                   <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
                     BOOKED
                   </span>
@@ -181,7 +185,11 @@ export default async function StudentDashboardPage() {
                   href="/student/book"
                   className="font-bold text-indigo-600 hover:underline"
                 >
-                  {meal.hasBooked ? "View Pass" : "Book Meal"}
+                  {meal.hasBooked
+                    ? "View Pass"
+                    : meal.availability === "FINISHED"
+                    ? "Food Finished"
+                    : "Book Meal"}
                 </Link>
               </div>
             </Card>

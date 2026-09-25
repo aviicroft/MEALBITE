@@ -9,12 +9,14 @@ import { bookMealAction } from "@/actions/booking.actions";
 interface MealBookingButtonProps {
   mealId: string;
   isOpen: boolean;
+  isAvailable: boolean;
   buttonText: string;
 }
 
 export const MealBookingButton: React.FC<MealBookingButtonProps> = ({
   mealId,
   isOpen,
+  isAvailable,
   buttonText,
 }) => {
   const router = useRouter();
@@ -22,7 +24,7 @@ export const MealBookingButton: React.FC<MealBookingButtonProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   const handleBook = async () => {
-    if (!isOpen) return;
+    if (!isOpen || !isAvailable) return;
     setLoading(true);
     setError(null);
 
@@ -43,10 +45,10 @@ export const MealBookingButton: React.FC<MealBookingButtonProps> = ({
     <div className="flex flex-col items-end space-y-1">
       <Button
         size="sm"
-        disabled={!isOpen || loading}
+        disabled={!isOpen || !isAvailable || loading}
         isLoading={loading}
         onClick={handleBook}
-        variant={isOpen ? "primary" : "secondary"}
+        variant={isOpen && isAvailable ? "primary" : "secondary"}
         className="text-xs"
       >
         {buttonText}

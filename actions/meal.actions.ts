@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { getCurrentUserRole } from "@/lib/auth";
-import { IMeal, MealType } from "@/types/delivery";
+import { IMeal, MealAvailability, MealType } from "@/types/delivery";
 
 export async function createMealAction(formData: {
   date: string;
@@ -107,6 +107,33 @@ export async function getAdminMealsAction(): Promise<IMeal[]> {
     console.error("Error fetching admin meals:", error);
     return [];
   }
+}
+
+export async function updateMealAvailabilityAction(
+  mealId: string,
+  availability: MealAvailability
+) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("UNAUTHENTICATED");
+
+  const role = await getCurrentUserRole();
+  if (role !== "admin") throw new Error("UNAUTHORIZED_ADMIN_ONLY");
+
+  if (!mealId.trim() || !["AVAILABLE", "FINISHED"].includes(availability)) {
+    throw new Error("Invalid meal availability update");
+  }
+
+  await prisma.meal.update({
+    where: { id: mealId },
+    data: { availability },
+  });
+
+  revalidatePath("/admin/meals");
+  revalidatePath("/admin/bookings");
+  revalidatePath("/student/book");
+  revalidatePath("/student/dashboard");
+
+  return { success: true, availability };
 }
 
 export async function getMealBookingsAction(mealId: string) {

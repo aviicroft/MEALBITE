@@ -1,8 +1,8 @@
 # Project Progress & Roadmap
 
 **Project:** Hostel Food Delivery Tracking & QR Food Collection System  
-**Current Status:** Fully Completed (SQLite + Prisma Migration & QR Food Collection System Verified & Production-Ready)  
-**Last Updated:** Phase 4 (SQLite Migration & QR Food Collection) Complete  
+**Current Status:** Food availability controls implemented and ready for verification
+**Last Updated:** Food Availability feature added
 
 ---
 
@@ -57,6 +57,11 @@
   - Active Deliveries
   - Delayed Deliveries
 - Comprehensive booking audit table at `/admin/bookings` with real-time status badges and student details.
+
+### 2.6 Food Availability
+- Meals now have a controlled `AVAILABLE` / `FINISHED` availability value, persisted in Prisma/SQLite.
+- Students see the food state and cannot create new bookings when food is finished; server-side booking validation enforces the restriction.
+- Admins can toggle availability from the meal management page. Existing `BOOKED` records remain scannable and collectible.
 
 ### 2.6 Testing & Verification
 - **Automated Test Suite:** 16 passing tests in `test/prisma-system.test.ts` covering user sync, booking window validation, duplicate booking prevention, opaque QR generation, atomic food collection, double-collection rejection, and delivery state transitions.

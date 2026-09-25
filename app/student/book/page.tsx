@@ -56,6 +56,7 @@ export default async function StudentBookPage() {
               const closeTime = new Date(meal.bookingClose);
               const isOpen = now >= openTime && now <= closeTime;
               const isPast = now > closeTime;
+              const isFoodAvailable = meal.availability === "AVAILABLE";
 
               return (
                 <Card
@@ -71,7 +72,7 @@ export default async function StudentBookPage() {
                     className={`px-4 py-2 text-xs font-semibold flex items-center justify-between ${
                       meal.hasBooked
                         ? "bg-emerald-50 text-emerald-800 border-b border-emerald-100"
-                        : isOpen
+                        : isOpen && isFoodAvailable
                         ? "bg-indigo-50 text-indigo-800 border-b border-indigo-100"
                         : "bg-slate-100 text-slate-500 border-b border-slate-200"
                     }`}
@@ -86,6 +87,8 @@ export default async function StudentBookPage() {
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         BOOKED
                       </span>
+                    ) : !isFoodAvailable ? (
+                      <span className="text-rose-700 font-bold">FOOD FINISHED</span>
                     ) : isOpen ? (
                       <span className="text-indigo-600 font-bold">
                         OPEN FOR BOOKING
@@ -119,9 +122,14 @@ export default async function StudentBookPage() {
 
                   <CardContent className="pt-2">
                     <div className="flex items-center justify-between border-t border-slate-100 pt-3">
-                      <span className="text-[11px] text-slate-500">
-                        {meal._count?.bookings || 0} students booked
-                      </span>
+                      <div className="space-y-1">
+                        <span className="block text-[11px] text-slate-500">
+                          {meal._count?.bookings || 0} students booked
+                        </span>
+                        <span className={`text-[11px] font-bold ${isFoodAvailable ? "text-emerald-700" : "text-rose-700"}`}>
+                          {isFoodAvailable ? "Food Available" : "Food Finished"}
+                        </span>
+                      </div>
 
                       {meal.hasBooked && meal.userBooking ? (
                         <Link href={`/student/pass/${meal.userBooking.id}`}>
@@ -133,9 +141,12 @@ export default async function StudentBookPage() {
                       ) : (
                         <MealBookingButton
                           mealId={meal.id}
-                          isOpen={isOpen}
+                          isOpen={isOpen && isFoodAvailable}
+                          isAvailable={isFoodAvailable}
                           buttonText={
-                            isOpen
+                            !isFoodAvailable
+                              ? "Food Finished"
+                              : isOpen
                               ? "Book This Meal"
                               : isPast
                               ? "Booking Closed"

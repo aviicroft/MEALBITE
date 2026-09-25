@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { getAdminMealsAction } from "@/actions/meal.actions";
 import { CreateMealModal } from "@/components/admin/CreateMealModal";
+import { MealAvailabilityControl } from "@/components/admin/MealAvailabilityControl";
 import { formatDate } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -77,15 +78,10 @@ export default async function AdminMealsPage() {
                         </div>
                       </div>
 
-                      <span
-                        className={`text-xs px-2.5 py-0.5 rounded-full font-bold ${
-                          isOpen
-                            ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                            : "bg-slate-100 text-slate-600"
-                        }`}
-                      >
-                        {isOpen ? "BOOKING OPEN" : "CLOSED"}
-                      </span>
+                      <MealAvailabilityControl
+                        mealId={meal.id}
+                        availability={meal.availability}
+                      />
                     </div>
 
                     <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100 text-xs space-y-1">
@@ -96,6 +92,11 @@ export default async function AdminMealsPage() {
                         {meal.menu}
                       </p>
                     </div>
+                    <p className="text-[11px] text-slate-500">
+                      Booking window: {isOpen ? "OPEN" : "CLOSED"}
+                      {meal.availability === "FINISHED" &&
+                        " · New bookings are not accepted; existing bookings remain valid."}
+                    </p>
 
                     <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-100">
                       <span className="text-slate-500 flex items-center gap-1 font-medium">

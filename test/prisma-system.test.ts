@@ -72,6 +72,7 @@ async function runPrismaTests() {
       },
     });
     assert(!!testMeal.id, 'Meal session created with valid window');
+    assert(testMeal.availability === 'AVAILABLE', 'New meals default to AVAILABLE');
 
     // 4. Booking & Cryptographic QR Token Generation
     console.log('\n[Test Suite 4: Food Booking & QR Token]');
@@ -88,6 +89,22 @@ async function runPrismaTests() {
       },
     });
     assert(booking1.status === 'BOOKED', 'Booking status initialized as BOOKED');
+
+    const finishedMeal = await prisma.meal.update({
+      where: { id: testMeal.id },
+      data: { availability: 'FINISHED' },
+    });
+    assert(finishedMeal.availability === 'FINISHED', 'Meal availability can be changed to FINISHED');
+
+    const availabilityPreservedBooking = await prisma.booking.findUnique({
+      where: { id: booking1.id },
+      include: { meal: true },
+    });
+    assert(
+      availabilityPreservedBooking?.status === 'BOOKED' &&
+        availabilityPreservedBooking.meal.availability === 'FINISHED',
+      'Existing BOOKED bookings remain valid after meal is FINISHED',
+    );
 
     // 5. Duplicate Booking Prevention
     console.log('\n[Test Suite 5: Duplicate Booking Prevention]');

@@ -131,6 +131,7 @@ export async function getAvailableMealsAction(): Promise<IMeal[]> {
         date: meal.date,
         type: meal.type,
         menu: meal.menu,
+        availability: meal.availability === "FINISHED" ? "FINISHED" : "AVAILABLE",
         bookingOpen: meal.bookingOpen,
         bookingClose: meal.bookingClose,
         createdAt: meal.createdAt,
@@ -169,6 +170,10 @@ export async function bookMealAction(mealId: string) {
 
   const now = new Date();
 
+  if (meal.availability !== "AVAILABLE") {
+    throw new Error("Food is finished. No new bookings are being accepted.");
+  }
+
   // Validate booking window
   if (now < meal.bookingOpen) {
     throw new Error(
@@ -182,34 +187,46 @@ export async function bookMealAction(mealId: string) {
     );
   }
 
-  // Prevent duplicate booking
-  const existing = await prisma.booking.findUnique({
-    where: {
-      userId_mealId: {
-        userId: user.id,
-        mealId: meal.id,
-      },
-    },
-  });
-
-  if (existing) {
-    throw new Error("You have already booked this meal. Check your active QR Pass.");
-  }
-
   // Generate cryptographically secure, opaque random QR token (no personal info inside)
   const qrToken = crypto.randomBytes(24).toString("hex");
 
-  const booking = await prisma.booking.create({
-    data: {
-      userId: user.id,
-      mealId: meal.id,
-      status: "BOOKED",
-      qrToken,
-      bookedAt: now,
-    },
-    include: {
-      meal: true,
-    },
+  const booking = await prisma.$transaction(async (tx) => {
+    // The conditional write makes availability authoritative at booking time,
+    // rather than relying on the student's rendered button state.
+    const availabilityCheck = await tx.meal.updateMany({
+      where: { id: meal.id, availability: "AVAILABLE" },
+      data: { availability: "AVAILABLE" },
+    });
+
+    if (availabilityCheck.count !== 1) {
+      throw new Error("Food is finished. No new bookings are being accepted.");
+    }
+
+    const existing = await tx.booking.findUnique({
+      where: {
+        userId_mealId: {
+          userId: user.id,
+          mealId: meal.id,
+        },
+      },
+    });
+
+    if (existing) {
+      throw new Error("You have already booked this meal. Check your active QR Pass.");
+    }
+
+    return tx.booking.create({
+      data: {
+        userId: user.id,
+        mealId: meal.id,
+        status: "BOOKED",
+        qrToken,
+        bookedAt: now,
+      },
+      include: {
+        meal: true,
+      },
+    });
   });
 
   revalidatePath("/student/dashboard");

@@ -1,5 +1,7 @@
 export type MealType = "BREAKFAST" | "LUNCH" | "SNACKS" | "DINNER";
 
+export type MealAvailability = "AVAILABLE" | "FINISHED";
+
 export type DeliveryStatus =
   | "PREPARING"
   | "DISPATCHED"
@@ -18,6 +20,7 @@ export interface IMeal {
   date: Date | string;
   type: MealType | string;
   menu: string;
+  availability: MealAvailability;
   bookingOpen: Date | string;
   bookingClose: Date | string;
   createdAt?: Date | string;
