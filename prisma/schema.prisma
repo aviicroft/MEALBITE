@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String    @id @default(cuid())
+  clerkUserId String    @unique
+  name        String
+  email       String
+  studentId   String    @default("")
+  roomNumber  String    @default("")
+  role        String    @default("student")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  bookings    Booking[]
+}
+
+model Meal {
+  id           String      @id @default(cuid())
+  date         DateTime
+  type         String      // BREAKFAST, LUNCH, SNACKS, DINNER
+  menu         String
+  bookingOpen  DateTime
+  bookingClose DateTime
+  createdAt    DateTime    @default(now())
+  bookings     Booking[]
+  deliveries   Delivery[]
+}
+
+model Booking {
+  id          String    @id @default(cuid())
+  userId      String
+  mealId      String
+  status      String    @default("BOOKED") // BOOKED, COLLECTED, CANCELLED, EXPIRED
+  qrToken     String    @unique
+  bookedAt    DateTime  @default(now())
+  collectedAt DateTime?
+  collectedBy String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  meal Meal @relation(fields: [mealId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, mealId])
+}
+
+model Delivery {
+  id                  String    @id @default(cuid())
+  mealId              String?
+  mealType            String    // BREAKFAST, LUNCH, SNACKS, DINNER
+  deliveryDate        DateTime
+  targetHostel        String    @default("All Hostels")
+  status              String    @default("PREPARING") // PREPARING, DISPATCHED, ON_THE_WAY, ARRIVED, DELAYED
+  dispatchTime        DateTime?
+  expectedArrivalTime DateTime
+  actualArrivalTime   DateTime?
+  isDelayed           Boolean   @default(false)
+  delayReason         String    @default("")
+  notes               String    @default("")
+  updatedBy           String    @default("admin")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  meal Meal? @relation(fields: [mealId], references: [id], onDelete: SetNull)
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  title     String
+  message   String
+  type      String   @default("STATUS_UPDATE") // DELAY_ALERT, STATUS_UPDATE, ARRIVAL, BOOKING_ALERT
+  mealType  String?
+  createdAt DateTime @default(now())
+}
