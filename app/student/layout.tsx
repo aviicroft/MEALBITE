@@ -1,25 +1,13 @@
 import React from "react";
-import { auth } from "@clerk/nextjs/server";
-import { redirect } from "next/navigation";
-import { syncCurrentUser } from "@/lib/auth";
+import { requireAuth } from "@/lib/auth";
 
 export default async function StudentLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { userId } = await auth();
-
-  if (!userId) {
-    redirect("/sign-in");
-  }
-
-  // Auto-sync authenticated user profile with MongoDB User model
-  try {
-    await syncCurrentUser();
-  } catch (error) {
-    console.warn("Could not sync user with database:", error);
-  }
+  // Enforces server-side authentication
+  await requireAuth();
 
   return (
     <div className="space-y-6">

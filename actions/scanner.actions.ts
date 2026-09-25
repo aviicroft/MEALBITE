@@ -1,8 +1,7 @@
 "use server";
 
-import { currentUser } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/prisma";
+import { sql } from "@/lib/db";
 import { requireRole } from "@/lib/auth";
 
 export interface ScanVerificationResult {
@@ -26,7 +25,7 @@ export async function verifyAndCollectQrAction(
   token: string
 ): Promise<ScanVerificationResult> {
   // 1. Strict Server-Side Admin Authorization
-  await requireRole(["admin"]);
+  const adminUser = await requireRole(["admin"]);
 
   const cleanToken = token.trim();
   if (!cleanToken) {
@@ -37,36 +36,33 @@ export async function verifyAndCollectQrAction(
     };
   }
 
-  const user = await currentUser();
-  const wardenName =
-    user?.fullName || user?.firstName || user?.username || "Hostel Warden";
-
+  const wardenName = adminUser?.name || "Hostel Warden";
   const now = new Date();
 
   // 2. ATOMIC UPDATE: Only update if booking is currently 'BOOKED'
-  // This guarantees that even if two wardens scan the exact same QR simultaneously,
-  // only ONE database transaction will succeed.
-  const updateResult = await prisma.booking.updateMany({
-    where: {
-      qrToken: cleanToken,
-      status: "BOOKED",
-    },
-    data: {
-      status: "COLLECTED",
-      collectedAt: now,
-      collectedBy: wardenName,
-    },
-  });
+  // In PostgreSQL, UPDATE ... WHERE status = 'BOOKED' RETURNING * guarantees
+  // that only ONE concurrent scan can transition the record.
+  const updateResult = await sql`
+    UPDATE "Booking"
+    SET status = 'COLLECTED', "collectedAt" = NOW(), "collectedBy" = ${wardenName}
+    WHERE "qrToken" = ${cleanToken} AND status = 'BOOKED'
+    RETURNING *
+  `;
 
   // If update succeeded, return successful issuance with student & meal details
-  if (updateResult.count === 1) {
-    const collectedBooking = await prisma.booking.findUnique({
-      where: { qrToken: cleanToken },
-      include: {
-        user: true,
-        meal: true,
-      },
-    });
+  if (updateResult && updateResult.length === 1) {
+    const collectedBookings = await sql`
+      SELECT b.id, b.status, b."collectedAt", b."collectedBy",
+        json_build_object('name', u.name, 'studentId', u."studentId", 'roomNumber', u."roomNumber") as user,
+        json_build_object('type', m.type, 'menu', m.menu) as meal
+      FROM "Booking" b
+      JOIN "User" u ON b."userId" = u.id
+      JOIN "Meal" m ON b."mealId" = m.id
+      WHERE b."qrToken" = ${cleanToken}
+      LIMIT 1
+    `;
+
+    const collectedBooking = collectedBookings[0];
 
     revalidatePath("/admin/dashboard");
     revalidatePath("/admin/bookings");
@@ -76,32 +72,37 @@ export async function verifyAndCollectQrAction(
     return {
       success: true,
       message: "Food successfully issued! Collection logged.",
-      studentName: collectedBooking?.user.name || "Student",
-      studentId: collectedBooking?.user.studentId || "N/A",
-      roomNumber: collectedBooking?.user.roomNumber || "N/A",
-      mealType: collectedBooking?.meal.type || "Meal",
-      menu: collectedBooking?.meal.menu || "",
+      studentName: collectedBooking?.user?.name || "Student",
+      studentId: collectedBooking?.user?.studentId || "N/A",
+      roomNumber: collectedBooking?.user?.roomNumber || "N/A",
+      mealType: collectedBooking?.meal?.type || "Meal",
+      menu: collectedBooking?.meal?.menu || "",
       collectedAt: now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       collectedBy: wardenName,
     };
   }
 
   // If update failed (count === 0), determine exact reason to prevent ambiguity
-  const existingBooking = await prisma.booking.findUnique({
-    where: { qrToken: cleanToken },
-    include: {
-      user: true,
-      meal: true,
-    },
-  });
+  const existingBookings = await sql`
+    SELECT b.id, b.status, b."collectedAt", b."collectedBy",
+      json_build_object('name', u.name, 'studentId', u."studentId", 'roomNumber', u."roomNumber") as user,
+      json_build_object('type', m.type, 'menu', m.menu) as meal
+    FROM "Booking" b
+    JOIN "User" u ON b."userId" = u.id
+    JOIN "Meal" m ON b."mealId" = m.id
+    WHERE b."qrToken" = ${cleanToken}
+    LIMIT 1
+  `;
 
-  if (!existingBooking) {
+  if (!existingBookings || existingBookings.length === 0) {
     return {
       success: false,
       message: "Scan rejected",
       error: "Invalid QR: No booking record matches this code.",
     };
   }
+
+  const existingBooking = existingBookings[0];
 
   if (existingBooking.status === "COLLECTED") {
     const timeStr = existingBooking.collectedAt
@@ -114,8 +115,8 @@ export async function verifyAndCollectQrAction(
       success: false,
       message: "Double Collection Blocked",
       error: `Booking already collected at ${timeStr} by ${existingBooking.collectedBy || "Warden"}. A pass cannot be used twice.`,
-      studentName: existingBooking.user.name,
-      mealType: existingBooking.meal.type,
+      studentName: existingBooking.user?.name,
+      mealType: existingBooking.meal?.type,
     };
   }
 
@@ -124,8 +125,8 @@ export async function verifyAndCollectQrAction(
       success: false,
       message: "Scan rejected",
       error: "This meal booking was cancelled by the student or staff.",
-      studentName: existingBooking.user.name,
-      mealType: existingBooking.meal.type,
+      studentName: existingBooking.user?.name,
+      mealType: existingBooking.meal?.type,
     };
   }
 
@@ -134,8 +135,8 @@ export async function verifyAndCollectQrAction(
       success: false,
       message: "Scan rejected",
       error: "This meal booking has expired.",
-      studentName: existingBooking.user.name,
-      mealType: existingBooking.meal.type,
+      studentName: existingBooking.user?.name,
+      mealType: existingBooking.meal?.type,
     };
   }
 

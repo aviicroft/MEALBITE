@@ -1,7 +1,5 @@
 import React from "react";
-import { auth } from "@clerk/nextjs/server";
-import { redirect } from "next/navigation";
-import { requireRole, syncCurrentUser } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 
@@ -10,21 +8,8 @@ export default async function AdminLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const { userId } = await auth();
-
-  if (!userId) {
-    redirect("/sign-in");
-  }
-
-  // Server-side Clerk public metadata enforcement.
-  await requireRole(["admin"]);
-
-  // Auto-sync admin user profile with MongoDB User model
-  try {
-    await syncCurrentUser();
-  } catch (error) {
-    console.warn("Could not sync admin user with database:", error);
-  }
+  // Server-side admin role enforcement. Students are strictly barred from access.
+  await requireAdmin();
 
   return (
     <div className="space-y-6">

@@ -1,106 +1,118 @@
-import { auth, currentUser } from "@clerk/nextjs/server";
-import { prisma } from "@/lib/prisma";
+import { redirect } from "next/navigation";
+import { sql } from "@/lib/db";
+import { getSessionToken, destroySession } from "@/lib/session";
 import { UserRole, UserSessionProfile } from "@/types/user";
 
-export function resolveRoleFromPublicMetadata(role: unknown): UserRole {
-  return role === "admin" ? "admin" : "student";
-}
-
 /**
- * Resolves the application role from the current Clerk user on the server.
- * The live Clerk user object is preferred over session claims so metadata changes
- * are not masked by stale claims.
+ * Resolves the authenticated user from the active HTTP-only session cookie.
+ * Passwords and sensitive internal fields are strictly omitted.
  */
-export async function getCurrentUserRole(): Promise<UserRole | null> {
-  const { userId } = await auth();
+export async function getCurrentUser(): Promise<UserSessionProfile | null> {
+  try {
+    const token = await getSessionToken();
+    if (!token) return null;
 
-  if (!userId) {
+    const rows = await sql`
+      SELECT s.token, s."expiresAt",
+             u.id, u.name, u.email, u.role, u."studentId", u."roomNumber"
+      FROM "Session" s
+      JOIN "User" u ON s."userId" = u.id
+      WHERE s.token = ${token}
+      LIMIT 1
+    `;
+
+    if (!rows || rows.length === 0) return null;
+
+    const row = rows[0];
+    const expiresAt = new Date(row.expiresAt);
+
+    // Check session expiration
+    if (expiresAt < new Date()) {
+      await destroySession();
+      return null;
+    }
+
+    const role = (
+      row.role?.toUpperCase() === "ADMIN" ? "ADMIN" : "STUDENT"
+    ) as "STUDENT" | "ADMIN";
+
+    return {
+      id: row.id,
+      name: row.name,
+      email: row.email,
+      role,
+      studentId: row.studentId,
+      roomNumber: row.roomNumber,
+    };
+  } catch (error: unknown) {
+    const err = error as { digest?: string; message?: string };
+    if (
+      err?.digest === "DYNAMIC_SERVER_USAGE" ||
+      err?.message?.includes("Dynamic server usage")
+    ) {
+      throw error;
+    }
+    console.error("Error retrieving current user:", error);
     return null;
   }
-
-  try {
-    const clerkUser = await currentUser();
-    const publicMetadataRole = clerkUser?.publicMetadata?.role;
-    const resolvedRole = resolveRoleFromPublicMetadata(publicMetadataRole);
-
-    return resolvedRole;
-  } catch {
-    console.error("Error resolving authenticated user role.");
-    return "student";
-  }
 }
 
 /**
- * Synchronizes the authenticated Clerk user with the local application profile.
- * The persisted role is informational; authorization always uses live Clerk data.
+ * Ensures the request is from an authenticated user.
+ * Redirects to /login if unauthenticated.
  */
-export async function syncCurrentUser(): Promise<UserSessionProfile | null> {
-  const { userId } = await auth();
-  if (!userId) return null;
-
-  const clerkUser = await currentUser();
-  if (!clerkUser) return null;
-
-  const email =
-    clerkUser.emailAddresses[0]?.emailAddress ||
-    `${clerkUser.id}@hostel.placeholder`;
-  const name =
-    [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") ||
-    clerkUser.username ||
-    "Hostel Resident";
-  const role = resolveRoleFromPublicMetadata(clerkUser.publicMetadata?.role);
-
-  try {
-    const updatedUser = await prisma.user.upsert({
-      where: { clerkUserId: userId },
-      update: { name, email, role },
-      create: {
-        clerkUserId: userId,
-        name,
-        email,
-        role,
-        studentId: "",
-        roomNumber: "",
-      },
-    });
-
-    return {
-      clerkUserId: userId,
-      name: updatedUser.name,
-      email: updatedUser.email,
-      role,
-      studentId: updatedUser.studentId,
-      roomNumber: updatedUser.roomNumber,
-    };
-  } catch (error) {
-    console.error("Error syncing user with database:", error);
-    return {
-      clerkUserId: userId,
-      name,
-      email,
-      role,
-    };
+export async function requireAuth(): Promise<UserSessionProfile> {
+  const user = await getCurrentUser();
+  if (!user) {
+    redirect("/login");
   }
+  return user;
 }
 
 /**
- * Strict server-side role guard for pages and server actions.
+ * Ensures the request is from an authenticated administrator (Warden/Admin).
+ * Redirects to /unauthorized if the user is not an admin.
  */
-export async function requireRole(allowedRoles: UserRole[]): Promise<{
-  userId: string;
-  role: UserRole;
-}> {
-  const { userId } = await auth();
+export async function requireAdmin(): Promise<UserSessionProfile> {
+  const user = await requireAuth();
+  if (user.role !== "ADMIN") {
+    redirect("/unauthorized");
+  }
+  return user;
+}
 
-  if (!userId) {
+/**
+ * Strict server-side role guard for server actions and mutations.
+ * Throws errors instead of redirecting so calling actions can handle errors gracefully.
+ */
+export async function requireRole(
+  allowedRoles: UserRole[]
+): Promise<UserSessionProfile> {
+  const user = await getCurrentUser();
+
+  if (!user) {
     throw new Error("UNAUTHENTICATED");
   }
 
-  const role = await getCurrentUserRole();
-
-  if (!role || !allowedRoles.includes(role)) {
+  const normalizedAllowed = allowedRoles.map((r) => r.toUpperCase());
+  if (!normalizedAllowed.includes(user.role.toUpperCase())) {
     throw new Error("FORBIDDEN");
   }
 
-  return { userId, role };
+  return user;
+}
+
+/**
+ * Resolves the application role of the current session user.
+ */
+export async function getCurrentUserRole(): Promise<"STUDENT" | "ADMIN" | null> {
+  const user = await getCurrentUser();
+  return user ? user.role : null;
+}
+
+/**
+ * Backward compatibility alias for existing callers.
+ */
+export async function syncCurrentUser(): Promise<UserSessionProfile | null> {
+  return getCurrentUser();
 }

@@ -1,6 +1,4 @@
 import Link from "next/link";
-import { SignInButton } from "@clerk/nextjs";
-import { auth } from "@clerk/nextjs/server";
 import {
   UtensilsCrossed,
   Clock,
@@ -13,20 +11,13 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { getCurrentUserRole } from "@/lib/auth";
+import { getCurrentUser } from "@/lib/auth";
 
 export default async function HomePage() {
-  const { userId } = await auth();
-  const isSignedIn = !!userId;
-
-  let role: "student" | "admin" | null = null;
-  if (isSignedIn) {
-    try {
-      role = await getCurrentUserRole();
-    } catch {
-      role = "student";
-    }
-  }
+  const user = await getCurrentUser();
+  const isSignedIn = !!user;
+  const role = user?.role || null;
+  const isAdmin = role === "ADMIN";
 
   return (
     <div className="space-y-12 py-4 sm:py-8">
@@ -49,16 +40,23 @@ export default async function HomePage() {
         {/* Dynamic CTA buttons */}
         <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
           {!isSignedIn ? (
-            <SignInButton mode="modal">
-              <Button size="lg" className="shadow-md">
-                Sign In to Track Food
-                <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
-            </SignInButton>
+            <div className="flex items-center gap-3">
+              <Link href="/login">
+                <Button size="lg" className="shadow-md">
+                  Sign In to Track Food
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              </Link>
+              <Link href="/register">
+                <Button variant="outline" size="lg">
+                  Register Account
+                </Button>
+              </Link>
+            </div>
           ) : (
-            <Link href={role === "admin" ? "/admin/dashboard" : "/student/dashboard"}>
+            <Link href={isAdmin ? "/admin/dashboard" : "/student/dashboard"}>
               <Button size="lg" className="shadow-md">
-                Go to {role === "admin" ? "Admin Console" : "Student Dashboard"}
+                Go to {isAdmin ? "Admin Console" : "Student Dashboard"}
                 <ArrowRight className="w-4 h-4 ml-2" />
               </Button>
             </Link>

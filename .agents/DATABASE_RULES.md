@@ -2,101 +2,113 @@
 
 ## 1. Database Paradigm
 
-- **Engine:** SQLite (Relational embedded database)
-- **File Location:** `prisma/dev.db`
+- **Engine:** Neon PostgreSQL (Cloud serverless relational PostgreSQL)
 - **Object-Relational Mapping (ORM):** Prisma Client (`@prisma/client`)
-- **Connection Variable:** `DATABASE_URL="file:./dev.db"`
-- **Strict Prohibition:** MongoDB, Mongoose, MySQL, PostgreSQL, Firebase, Supabase, and Flask are strictly prohibited.
-- **Client Security:** No database calls or Prisma client access permitted from client-side components (`'use client'`). All database operations must execute inside Server Actions or Route Handlers.
+- **Connection Variable:** `DATABASE_URL="postgresql://[user]:[password]@[endpoint].neon.tech/[dbname]?sslmode=require"`
+- **Strict Prohibition:** SQLite, MongoDB, Mongoose, MySQL, Firebase, Supabase, and Flask are strictly prohibited.
+- **Client Security:** No database calls or Prisma client access permitted from client-side components (`'use client'`). All database operations must execute inside Server Actions or Route Handlers. Sensitive fields like `passwordHash` must never be sent to the client.
 
 ---
 
 ## 2. Reusable Prisma Client Singleton (`lib/prisma.ts`)
 
-In Next.js development mode, hot-reloading can instantiate duplicate Prisma clients, leading to file locking or connection exhaustion on SQLite. The client singleton is cached globally:
+In Next.js development mode, hot-reloading can instantiate duplicate Prisma clients, leading to connection exhaustion. The client singleton is cached globally:
 
 ```typescript
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from "@prisma/client";
 
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-};
+declare global {
+  var prismaGlobal: PrismaClient | undefined;
+}
 
 export const prisma =
-  globalForPrisma.prisma ??
+  globalThis.prismaGlobal ??
   new PrismaClient({
-    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+    log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
   });
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+if (process.env.NODE_ENV !== "production") {
+  globalThis.prismaGlobal = prisma;
+}
+
+export default prisma;
 ```
 
 ---
 
 ## 3. Data Models Specification (`prisma/schema.prisma`)
 
-The application defines 5 core models:
+The application defines 6 core models:
 
 ### 3.1 `User` Model
-Stores student and warden profiles synced with Clerk. **Never store passwords or auth tokens in this table.**
-- `id` (String, cuid/uuid primary key)
-- `clerkUserId` (String, unique indexed)
+Stores student and warden profiles with securely hashed credentials.
+- `id` (String, cuid primary key)
 - `name` (String)
 - `email` (String, unique indexed)
-- `studentId` (String, optional)
+- `passwordHash` (String, bcrypt salted hash, never returned to client)
+- `studentId` (String, optional, unique indexed)
 - `roomNumber` (String, optional)
-- `role` (String, default: "student")
+- `role` (String, default: "STUDENT", "STUDENT" | "ADMIN")
 - `createdAt`, `updatedAt` (DateTime)
-- Relations: `bookings`, `createdMeals`
+- Relations: `bookings`, `sessions`
 
-### 3.2 `Meal` Model
-Represents scheduled mess meals (Breakfast, Lunch, Dinner) with defined booking cutoffs.
+### 3.2 `Session` Model
+Stores secure server-side sessions for authenticated users.
+- `id` (String, cuid primary key)
+- `token` (String, unique indexed 256-bit cryptographically secure token)
+- `userId` (String, foreign key to `User`)
+- `expiresAt` (DateTime, session expiration timestamp)
+- `createdAt` (DateTime)
+- Relations: `user`
+
+### 3.3 `Meal` Model
+Represents scheduled mess meals (Breakfast, Lunch, Snacks, Dinner) with defined booking cutoffs.
 - `id` (String, primary key)
 - `date` (DateTime)
-- `type` (String: `BREAKFAST` | `LUNCH` | `DINNER`)
+- `type` (String: `BREAKFAST` | `LUNCH` | `SNACKS` | `DINNER`)
 - `menu` (String)
+- `availability` (String: `AVAILABLE` | `FINISHED`, default: `AVAILABLE`)
 - `bookingOpen` (DateTime)
 - `bookingClose` (DateTime)
-- `createdById` (String, optional)
-- Relations: `bookings`, `createdBy`
+- Relations: `bookings`, `deliveries`
 
-### 3.3 `Booking` Model
+### 3.4 `Booking` Model
 Represents a student's booked meal pass and collection state.
 - `id` (String, primary key)
 - `userId` (String, foreign key to `User`)
 - `mealId` (String, foreign key to `Meal`)
 - `qrToken` (String, unique, 48-char opaque hex string)
-- `status` (String: `BOOKED` | `COLLECTED` | `CANCELLED`, default: `BOOKED`)
-- `bookingTime` (DateTime, default: `now()`)
+- `status` (String: `BOOKED` | `COLLECTED` | `CANCELLED` | `EXPIRED`, default: `BOOKED`)
+- `bookedAt` (DateTime, default: `now()`)
 - `collectedAt` (DateTime, optional)
 - `collectedBy` (String, optional - name/email of warden)
 - **Constraint:** `@@unique([userId, mealId])` (strictly prevents duplicate bookings by a student for the same meal).
 - **Index:** `@@index([qrToken])`, `@@index([status])`.
 
-### 3.4 `Delivery` Model
+### 3.5 `Delivery` Model
 Represents real-time hostel catering delivery sessions.
 - `id` (String, primary key)
+- `mealId` (String, optional, foreign key to `Meal`)
 - `mealType` (String: `BREAKFAST` | `LUNCH` | `SNACKS` | `DINNER`)
-- `date` (DateTime)
+- `deliveryDate` (DateTime)
 - `targetHostel` (String, default: "All Hostels")
 - `status` (String: `PREPARING` | `DISPATCHED` | `ON_THE_WAY` | `ARRIVED` | `DELAYED`)
 - `dispatchTime` (DateTime, optional)
 - `expectedArrivalTime` (DateTime)
 - `actualArrivalTime` (DateTime, optional)
 - `isDelayed` (Boolean, default: false)
-- `delayReason` (String, optional)
-- `notes` (String, optional)
-- `createdByClerkId` (String)
+- `delayReason` (String, default: "")
+- `notes` (String, default: "")
+- `updatedBy` (String, default: "admin")
 - `createdAt`, `updatedAt` (DateTime)
-- Relations: `notifications`
 
-### 3.5 `Notification` Model
+### 3.6 `Notification` Model
 Broadcasts in-app status updates and delay announcements.
 - `id` (String, primary key)
 - `title` (String)
 - `message` (String)
-- `type` (String: `STATUS_UPDATE` | `DELAY_ALERT` | `ARRIVAL`)
-- `deliveryId` (String, optional, foreign key to `Delivery`)
+- `type` (String: `STATUS_UPDATE` | `DELAY_ALERT` | `ARRIVAL` | `BOOKING_ALERT`)
+- `mealType` (String, optional)
 - `createdAt` (DateTime, default: `now()`)
 
 ---

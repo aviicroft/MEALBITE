@@ -1,9 +1,9 @@
 "use server";
 
+import crypto from "crypto";
 import { revalidatePath } from "next/cache";
-import { auth } from "@clerk/nextjs/server";
-import { prisma } from "@/lib/prisma";
-import { getCurrentUserRole, requireRole } from "@/lib/auth";
+import { sql } from "@/lib/db";
+import { requireRole } from "@/lib/auth";
 import { IMeal, MealAvailability, MealType } from "@/types/delivery";
 
 export async function createMealAction(formData: {
@@ -14,11 +14,7 @@ export async function createMealAction(formData: {
   bookingClose: string;
   targetHostel?: string;
 }) {
-  const { userId } = await auth();
-  if (!userId) throw new Error("UNAUTHENTICATED");
-
-  const role = await getCurrentUserRole();
-  if (role !== "admin") throw new Error("UNAUTHORIZED_ADMIN_ONLY");
+  const user = await requireRole(["admin"]);
 
   const mealDate = new Date(formData.date);
   const openDate = new Date(formData.bookingOpen);
@@ -32,18 +28,15 @@ export async function createMealAction(formData: {
     throw new Error("Booking open time must be earlier than booking close time");
   }
 
-  // Create Meal in Prisma
-  const newMeal = await prisma.meal.create({
-    data: {
-      date: mealDate,
-      type: formData.type,
-      menu: formData.menu.trim(),
-      bookingOpen: openDate,
-      bookingClose: closeDate,
-    },
-  });
+  const mealId = crypto.randomUUID();
+  const newMeals = await sql`
+    INSERT INTO "Meal" (id, date, type, menu, availability, "bookingOpen", "bookingClose", "createdAt")
+    VALUES (${mealId}, ${mealDate.toISOString()}, ${formData.type}, ${formData.menu.trim()}, 'AVAILABLE', ${openDate.toISOString()}, ${closeDate.toISOString()}, NOW())
+    RETURNING *
+  `;
+  const newMeal = newMeals[0];
 
-  // Calculate default delivery expected time (1 hour after booking close or around meal time)
+  // Calculate default delivery expected time
   const defaultDeliveryArrival = new Date(mealDate);
   if (formData.type === "BREAKFAST") {
     defaultDeliveryArrival.setHours(8, 0, 0, 0);
@@ -56,30 +49,34 @@ export async function createMealAction(formData: {
   }
 
   // Automatically create a corresponding Delivery record linked to this meal
-  await prisma.delivery.create({
-    data: {
-      mealId: newMeal.id,
-      mealType: formData.type,
-      deliveryDate: mealDate,
-      targetHostel: formData.targetHostel || "All Hostels (Block A, B, C)",
-      status: "PREPARING",
-      expectedArrivalTime: defaultDeliveryArrival,
-      isDelayed: false,
-      delayReason: "",
-      notes: `Fresh ${formData.type.toLowerCase()} service: ${formData.menu.slice(0, 60)}...`,
-      updatedBy: userId,
-    },
-  });
+  const deliveryId = crypto.randomUUID();
+  await sql`
+    INSERT INTO "Delivery" (
+      id, "mealId", "mealType", "deliveryDate", "targetHostel", status,
+      "expectedArrivalTime", "isDelayed", "delayReason", notes, "updatedBy", "createdAt", "updatedAt"
+    )
+    VALUES (
+      ${deliveryId}, ${newMeal.id}, ${formData.type}, ${mealDate.toISOString()},
+      ${formData.targetHostel || "All Hostels (Block A, B, C)"}, 'PREPARING',
+      ${defaultDeliveryArrival.toISOString()}, false, '',
+      ${`Fresh ${formData.type.toLowerCase()} service: ${formData.menu.slice(0, 60)}...`},
+      ${user.name || user.email}, NOW(), NOW()
+    )
+  `;
 
   // Create in-app announcement
-  await prisma.notification.create({
-    data: {
-      title: `New ${formData.type} Available for Booking`,
-      message: `Menu: ${formData.menu.trim()}. Booking closes at ${closeDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`,
-      type: "BOOKING_ALERT",
-      mealType: formData.type,
-    },
-  });
+  const notifId = crypto.randomUUID();
+  await sql`
+    INSERT INTO "Notification" (id, title, message, type, "mealType", "createdAt")
+    VALUES (
+      ${notifId},
+      ${`New ${formData.type} Available for Booking`},
+      ${`Menu: ${formData.menu.trim()}. Booking closes at ${closeDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`},
+      'BOOKING_ALERT',
+      ${formData.type},
+      NOW()
+    )
+  `;
 
   revalidatePath("/admin/meals");
   revalidatePath("/admin/dashboard");
@@ -94,17 +91,26 @@ export async function getAdminMealsAction(): Promise<IMeal[]> {
   await requireRole(["admin"]);
 
   try {
-    const meals = await prisma.meal.findMany({
-      orderBy: { date: "desc" },
-      include: {
-        _count: {
-          select: { bookings: true },
-        },
-      },
-      take: 20,
-    });
+    const meals = await sql`
+      SELECT m.id, m.date, m.type, m.menu, m.availability, m."bookingOpen", m."bookingClose", m."createdAt",
+        (SELECT COUNT(*)::int FROM "Booking" b WHERE b."mealId" = m.id) as booking_count
+      FROM "Meal" m
+      ORDER BY m.date DESC
+      LIMIT 20
+    `;
 
-    return JSON.parse(JSON.stringify(meals));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return meals.map((meal: any) => ({
+      id: meal.id,
+      date: new Date(meal.date),
+      type: meal.type,
+      menu: meal.menu,
+      availability: meal.availability,
+      bookingOpen: new Date(meal.bookingOpen),
+      bookingClose: new Date(meal.bookingClose),
+      createdAt: new Date(meal.createdAt),
+      _count: { bookings: meal.booking_count || 0 },
+    }));
   } catch (error) {
     console.error("Error fetching admin meals:", error);
     return [];
@@ -115,20 +121,17 @@ export async function updateMealAvailabilityAction(
   mealId: string,
   availability: MealAvailability
 ) {
-  const { userId } = await auth();
-  if (!userId) throw new Error("UNAUTHENTICATED");
-
-  const role = await getCurrentUserRole();
-  if (role !== "admin") throw new Error("UNAUTHORIZED_ADMIN_ONLY");
+  await requireRole(["admin"]);
 
   if (!mealId.trim() || !["AVAILABLE", "FINISHED"].includes(availability)) {
     throw new Error("Invalid meal availability update");
   }
 
-  await prisma.meal.update({
-    where: { id: mealId },
-    data: { availability },
-  });
+  await sql`
+    UPDATE "Meal"
+    SET availability = ${availability}
+    WHERE id = ${mealId}
+  `;
 
   revalidatePath("/admin/meals");
   revalidatePath("/admin/bookings");
@@ -142,21 +145,16 @@ export async function getMealBookingsAction(mealId: string) {
   await requireRole(["admin"]);
 
   try {
-    const bookings = await prisma.booking.findMany({
-      where: { mealId },
-      include: {
-        user: {
-          select: {
-            name: true,
-            email: true,
-            studentId: true,
-            roomNumber: true,
-          },
-        },
-        meal: true,
-      },
-      orderBy: { bookedAt: "desc" },
-    });
+    const bookings = await sql`
+      SELECT b.id, b."userId", b."mealId", b.status, b."qrToken", b."bookedAt", b."collectedAt", b."collectedBy",
+        json_build_object('name', u.name, 'email', u.email, 'studentId', u."studentId", 'roomNumber', u."roomNumber") as user,
+        json_build_object('id', m.id, 'type', m.type, 'menu', m.menu, 'date', m.date, 'availability', m.availability) as meal
+      FROM "Booking" b
+      JOIN "User" u ON b."userId" = u.id
+      JOIN "Meal" m ON b."mealId" = m.id
+      WHERE b."mealId" = ${mealId}
+      ORDER BY b."bookedAt" DESC
+    `;
 
     return JSON.parse(JSON.stringify(bookings));
   } catch (error) {

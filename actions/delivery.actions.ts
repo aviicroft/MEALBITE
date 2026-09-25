@@ -1,8 +1,8 @@
 "use server";
 
+import crypto from "crypto";
 import { revalidatePath } from "next/cache";
-import { auth } from "@clerk/nextjs/server";
-import { prisma } from "@/lib/prisma";
+import { sql } from "@/lib/db";
 import { requireRole } from "@/lib/auth";
 import { seedDefaultMealsIfEmpty } from "@/actions/booking.actions";
 import {
@@ -33,26 +33,42 @@ export async function getLiveDeliveryAction(): Promise<IDelivery | null> {
     await seedDefaultMealsIfEmpty();
 
     // Look for active delivery first
-    let active = await prisma.delivery.findFirst({
-      where: {
-        status: { in: ["PREPARING", "DISPATCHED", "ON_THE_WAY", "DELAYED"] },
-      },
-      orderBy: [{ deliveryDate: "desc" }, { createdAt: "desc" }],
-    });
+    let active = await sql`
+      SELECT * FROM "Delivery"
+      WHERE status IN ('PREPARING', 'DISPATCHED', 'ON_THE_WAY', 'DELAYED')
+      ORDER BY "deliveryDate" DESC, "createdAt" DESC
+      LIMIT 1
+    `;
 
     // If none active, return the most recent arrived delivery
-    if (!active) {
-      active = await prisma.delivery.findFirst({
-        orderBy: [{ deliveryDate: "desc" }, { createdAt: "desc" }],
-      });
+    if (!active || active.length === 0) {
+      active = await sql`
+        SELECT * FROM "Delivery"
+        ORDER BY "deliveryDate" DESC, "createdAt" DESC
+        LIMIT 1
+      `;
     }
 
-    if (!active) return null;
+    if (!active || active.length === 0) return null;
 
+    const d = active[0];
     return {
-      ...active,
-      _id: active.id,
-      status: active.status as DeliveryStatus,
+      id: d.id,
+      _id: d.id,
+      mealId: d.mealId,
+      mealType: d.mealType as MealType,
+      deliveryDate: new Date(d.deliveryDate),
+      targetHostel: d.targetHostel,
+      status: d.status as DeliveryStatus,
+      dispatchTime: d.dispatchTime ? new Date(d.dispatchTime) : undefined,
+      expectedArrivalTime: new Date(d.expectedArrivalTime),
+      actualArrivalTime: d.actualArrivalTime ? new Date(d.actualArrivalTime) : undefined,
+      isDelayed: Boolean(d.isDelayed),
+      delayReason: d.delayReason || "",
+      notes: d.notes || "",
+      updatedBy: d.updatedBy,
+      createdAt: new Date(d.createdAt),
+      updatedAt: new Date(d.updatedAt),
     };
   } catch (error) {
     console.error("Error fetching live delivery:", error);
@@ -69,35 +85,46 @@ export async function getDeliveryHistoryAction(
   try {
     await seedDefaultMealsIfEmpty();
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const where: Record<string, any> = {};
+    const mealType = filters?.mealType && filters.mealType !== "ALL" ? filters.mealType : null;
+    const status = filters?.status && filters.status !== "ALL" ? filters.status : null;
 
-    if (filters?.mealType && filters.mealType !== "ALL") {
-      where.mealType = filters.mealType;
-    }
-
-    if (filters?.status && filters.status !== "ALL") {
-      where.status = filters.status;
-    }
-
+    let startDate: string | null = null;
+    let endDate: string | null = null;
     if (filters?.date) {
       const selected = new Date(filters.date);
       if (!isNaN(selected.getTime())) {
-        const startOfDay = new Date(selected.setHours(0, 0, 0, 0));
-        const endOfDay = new Date(selected.setHours(23, 59, 59, 999));
-        where.deliveryDate = { gte: startOfDay, lte: endOfDay };
+        startDate = new Date(selected.setHours(0, 0, 0, 0)).toISOString();
+        endDate = new Date(selected.setHours(23, 59, 59, 999)).toISOString();
       }
     }
 
-    const deliveries = await prisma.delivery.findMany({
-      where,
-      orderBy: [{ deliveryDate: "desc" }, { createdAt: "desc" }],
-    });
+    const deliveries = await sql`
+      SELECT * FROM "Delivery"
+      WHERE (${mealType}::text IS NULL OR "mealType" = ${mealType})
+        AND (${status}::text IS NULL OR status = ${status})
+        AND (${startDate}::text IS NULL OR "deliveryDate" >= ${startDate}::timestamp)
+        AND (${endDate}::text IS NULL OR "deliveryDate" <= ${endDate}::timestamp)
+      ORDER BY "deliveryDate" DESC, "createdAt" DESC
+    `;
 
-    return deliveries.map((d) => ({
-      ...d,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return deliveries.map((d: any) => ({
+      id: d.id,
       _id: d.id,
+      mealId: d.mealId,
+      mealType: d.mealType as MealType,
+      deliveryDate: new Date(d.deliveryDate),
+      targetHostel: d.targetHostel,
       status: d.status as DeliveryStatus,
+      dispatchTime: d.dispatchTime ? new Date(d.dispatchTime) : undefined,
+      expectedArrivalTime: new Date(d.expectedArrivalTime),
+      actualArrivalTime: d.actualArrivalTime ? new Date(d.actualArrivalTime) : undefined,
+      isDelayed: Boolean(d.isDelayed),
+      delayReason: d.delayReason || "",
+      notes: d.notes || "",
+      updatedBy: d.updatedBy,
+      createdAt: new Date(d.createdAt),
+      updatedAt: new Date(d.updatedAt),
     }));
   } catch (error) {
     console.error("Error fetching delivery history:", error);
@@ -115,38 +142,29 @@ export async function getAdminDashboardStatsAction(): Promise<DashboardStats> {
     await seedDefaultMealsIfEmpty();
 
     const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString();
 
     const [todayDeliveries, todayMeals, todayBookings] = await Promise.all([
-      prisma.delivery.findMany({
-        where: {
-          deliveryDate: { gte: startOfToday, lte: endOfToday },
-        },
-      }),
-      prisma.meal.findMany({
-        where: {
-          date: { gte: startOfToday, lte: endOfToday },
-        },
-      }),
-      prisma.booking.findMany({
-        where: {
-          bookedAt: { gte: startOfToday, lte: endOfToday },
-        },
-      }),
+      sql`SELECT status, "isDelayed" FROM "Delivery" WHERE "deliveryDate" >= ${startOfToday}::timestamp AND "deliveryDate" <= ${endOfToday}::timestamp`,
+      sql`SELECT id FROM "Meal" WHERE date >= ${startOfToday}::timestamp AND date <= ${endOfToday}::timestamp`,
+      sql`SELECT status FROM "Booking" WHERE "bookedAt" >= ${startOfToday}::timestamp AND "bookedAt" <= ${endOfToday}::timestamp`,
     ]);
 
     const todayTotal = todayDeliveries.length;
-    const completed = todayDeliveries.filter((d) => d.status === "ARRIVED").length;
-    const delayed = todayDeliveries.filter(
-      (d) => d.isDelayed || d.status === "DELAYED"
-    ).length;
-    const pending = todayDeliveries.filter((d) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const completed = todayDeliveries.filter((d: any) => d.status === "ARRIVED").length;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const delayed = todayDeliveries.filter((d: any) => d.isDelayed || d.status === "DELAYED").length;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pending = todayDeliveries.filter((d: any) =>
       ["PREPARING", "DISPATCHED", "ON_THE_WAY", "DELAYED"].includes(d.status)
     ).length;
 
-    const collectedCount = todayBookings.filter((b) => b.status === "COLLECTED").length;
-    const pendingCollectionCount = todayBookings.filter((b) => b.status === "BOOKED").length;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const collectedCount = todayBookings.filter((b: any) => b.status === "COLLECTED").length;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pendingCollectionCount = todayBookings.filter((b: any) => b.status === "BOOKED").length;
 
     return {
       todayTotal,
@@ -178,15 +196,22 @@ export async function getAdminDashboardStatsAction(): Promise<DashboardStats> {
  */
 export async function getRecentNotificationsAction(): Promise<INotification[]> {
   try {
-    const notifications = await prisma.notification.findMany({
-      orderBy: { createdAt: "desc" },
-      take: 5,
-    });
+    const notifications = await sql`
+      SELECT id, title, message, type, "mealType", "createdAt"
+      FROM "Notification"
+      ORDER BY "createdAt" DESC
+      LIMIT 5
+    `;
 
-    return notifications.map((n) => ({
-      ...n,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return notifications.map((n: any) => ({
+      id: n.id,
       _id: n.id,
+      title: n.title,
+      message: n.message,
       type: n.type as INotification["type"],
+      mealType: n.mealType,
+      createdAt: new Date(n.createdAt),
     }));
   } catch (error) {
     console.error("Error fetching notifications:", error);
@@ -204,10 +229,7 @@ export async function createDeliveryAction(formData: {
   targetHostel?: string;
   notes?: string;
 }) {
-  const { userId } = await auth();
-  if (!userId) throw new Error("UNAUTHENTICATED");
-
-  await requireRole(["admin"]);
+  const user = await requireRole(["admin"]);
 
   const deliveryDate = new Date(formData.deliveryDate || new Date());
   
@@ -220,29 +242,38 @@ export async function createDeliveryAction(formData: {
     expectedDate.setHours(expectedDate.getHours() + 1);
   }
 
-  const newDelivery = await prisma.delivery.create({
-    data: {
-      mealType: formData.mealType,
-      deliveryDate,
-      expectedArrivalTime: expectedDate,
-      targetHostel: formData.targetHostel || "All Hostels (Block A, B, C)",
-      notes: formData.notes || "",
-      status: "PREPARING",
-      isDelayed: false,
-      delayReason: "",
-      updatedBy: userId,
-    },
-  });
+  const deliveryId = crypto.randomUUID();
+  const targetHostel = formData.targetHostel || "All Hostels (Block A, B, C)";
+  const notes = formData.notes || "";
+  const updatedBy = user.name || user.email;
+
+  const newDeliveries = await sql`
+    INSERT INTO "Delivery" (
+      id, "mealType", "deliveryDate", "expectedArrivalTime", "targetHostel",
+      notes, status, "isDelayed", "delayReason", "updatedBy", "createdAt", "updatedAt"
+    )
+    VALUES (
+      ${deliveryId}, ${formData.mealType}, ${deliveryDate.toISOString()}, ${expectedDate.toISOString()}, ${targetHostel},
+      ${notes}, 'PREPARING', false, '', ${updatedBy}, NOW(), NOW()
+    )
+    RETURNING *
+  `;
+
+  const newDelivery = newDeliveries[0];
 
   // Post in-app announcement
-  await prisma.notification.create({
-    data: {
-      title: `${formData.mealType} Delivery Scheduled`,
-      message: `${formData.mealType} session initialized. Expected arrival ~ ${expectedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.`,
-      type: "STATUS_UPDATE",
-      mealType: formData.mealType,
-    },
-  });
+  const notifId = crypto.randomUUID();
+  await sql`
+    INSERT INTO "Notification" (id, title, message, type, "mealType", "createdAt")
+    VALUES (
+      ${notifId},
+      ${formData.mealType + ' Delivery Scheduled'},
+      ${formData.mealType + ' session initialized. Expected arrival ~ ' + expectedDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) + '.'},
+      'STATUS_UPDATE',
+      ${formData.mealType},
+      NOW()
+    )
+  `;
 
   revalidatePath("/admin/dashboard");
   revalidatePath("/admin/deliveries");
@@ -264,16 +295,14 @@ export async function updateDeliveryStatusAction(
   delayReason?: string,
   note?: string
 ) {
-  const { userId } = await auth();
-  if (!userId) throw new Error("UNAUTHENTICATED");
+  const user = await requireRole(["admin"]);
 
-  await requireRole(["admin"]);
+  const deliveries = await sql`
+    SELECT * FROM "Delivery" WHERE id = ${deliveryId} LIMIT 1
+  `;
 
-  const delivery = await prisma.delivery.findUnique({
-    where: { id: deliveryId },
-  });
-
-  if (!delivery) throw new Error("Delivery record not found");
+  if (!deliveries || deliveries.length === 0) throw new Error("Delivery record not found");
+  const delivery = deliveries[0];
 
   const oldStatus = delivery.status as DeliveryStatus;
 
@@ -285,33 +314,39 @@ export async function updateDeliveryStatusAction(
     );
   }
 
-  // Automated timestamp and field management
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const updateData: Record<string, any> = {
-    status: newStatus,
-    updatedBy: userId,
-  };
+  let dispatchTime = delivery.dispatchTime;
+  let actualArrivalTime = delivery.actualArrivalTime;
+  let isDelayed = delivery.isDelayed;
+  let delayReasonText = delivery.delayReason || "";
+  const notesText = note ? note.trim() : delivery.notes || "";
 
-  if (newStatus === "DISPATCHED" && !delivery.dispatchTime) {
-    updateData.dispatchTime = new Date();
+  if (newStatus === "DISPATCHED" && !dispatchTime) {
+    dispatchTime = new Date().toISOString();
   } else if (newStatus === "ARRIVED") {
-    updateData.actualArrivalTime = new Date();
-    updateData.isDelayed = false; // Reset active delay flag once arrived
+    actualArrivalTime = new Date().toISOString();
+    isDelayed = false;
   } else if (newStatus === "DELAYED") {
-    updateData.isDelayed = true;
+    isDelayed = true;
     if (delayReason) {
-      updateData.delayReason = delayReason.trim();
+      delayReasonText = delayReason.trim();
     }
   }
 
-  if (note) {
-    updateData.notes = note.trim();
-  }
+  const updatedDeliveries = await sql`
+    UPDATE "Delivery"
+    SET status = ${newStatus},
+        "dispatchTime" = ${dispatchTime ? new Date(dispatchTime).toISOString() : null},
+        "actualArrivalTime" = ${actualArrivalTime ? new Date(actualArrivalTime).toISOString() : null},
+        "isDelayed" = ${Boolean(isDelayed)},
+        "delayReason" = ${delayReasonText},
+        notes = ${notesText},
+        "updatedBy" = ${user.name || user.email},
+        "updatedAt" = NOW()
+    WHERE id = ${deliveryId}
+    RETURNING *
+  `;
 
-  const updatedDelivery = await prisma.delivery.update({
-    where: { id: deliveryId },
-    data: updateData,
-  });
+  const updatedDelivery = updatedDeliveries[0];
 
   // Post Notification for students
   let notifTitle = `${delivery.mealType} Delivery Updated`;
@@ -336,14 +371,11 @@ export async function updateDeliveryStatusAction(
     notifMessage = `Vehicle is approaching the hostel premises.`;
   }
 
-  await prisma.notification.create({
-    data: {
-      title: notifTitle,
-      message: notifMessage,
-      type: notifType,
-      mealType: delivery.mealType,
-    },
-  });
+  const notifId = crypto.randomUUID();
+  await sql`
+    INSERT INTO "Notification" (id, title, message, type, "mealType", "createdAt")
+    VALUES (${notifId}, ${notifTitle}, ${notifMessage}, ${notifType}, ${delivery.mealType}, NOW())
+  `;
 
   revalidatePath("/admin/dashboard");
   revalidatePath("/admin/deliveries");

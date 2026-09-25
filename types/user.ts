@@ -1,22 +1,29 @@
-export type UserRole = "student" | "admin";
+export type UserRole = "STUDENT" | "ADMIN" | "student" | "admin";
 
 export interface IUser {
-  _id?: string;
-  clerkUserId: string;
+  id: string;
   name: string;
   email: string;
-  studentId?: string;
-  roomNumber?: string;
-  role: UserRole;
+  studentId?: string | null;
+  roomNumber?: string | null;
+  role: "STUDENT" | "ADMIN";
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 export interface UserSessionProfile {
-  clerkUserId: string;
+  id: string;
   name: string;
   email: string;
-  role: UserRole;
-  studentId?: string;
-  roomNumber?: string;
+  role: "STUDENT" | "ADMIN";
+  studentId?: string | null;
+  roomNumber?: string | null;
+}
+
+export function isAdminRole(role?: string | null): boolean {
+  return role?.toUpperCase() === "ADMIN";
+}
+
+export function normalizeRole(role?: string | null): "STUDENT" | "ADMIN" {
+  return role?.toUpperCase() === "ADMIN" ? "ADMIN" : "STUDENT";
 }

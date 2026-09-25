@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ArrowLeft, QrCode, CheckCircle2, Clock, UtensilsCrossed } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
-import { prisma } from "@/lib/prisma";
+import { sql } from "@/lib/db";
 import { formatDate, formatTime } from "@/lib/utils";
 
 export const dynamic = "force-dynamic";
@@ -13,26 +13,35 @@ export default async function AdminBookingsPage({
   searchParams: Promise<{ mealId?: string }>;
 }) {
   const { mealId } = await searchParams;
+  const filterMealId = mealId || null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const where: Record<string, any> = {};
-  if (mealId) {
-    where.mealId = mealId;
-  }
+  const rawBookings: any = await sql`
+    SELECT b.id, b."userId", b."mealId", b.status, b."qrToken", b."bookedAt", b."collectedAt", b."collectedBy",
+      json_build_object('name', u.name, 'email', u.email, 'studentId', u."studentId", 'roomNumber', u."roomNumber") as user,
+      json_build_object('id', m.id, 'type', m.type, 'menu', m.menu, 'date', m.date, 'availability', m.availability) as meal
+    FROM "Booking" b
+    JOIN "User" u ON b."userId" = u.id
+    JOIN "Meal" m ON b."mealId" = m.id
+    WHERE (${filterMealId}::text IS NULL OR b."mealId" = ${filterMealId})
+    ORDER BY b."bookedAt" DESC
+    LIMIT 50
+  `;
 
-  const bookings = await prisma.booking.findMany({
-    where,
-    include: {
-      user: true,
-      meal: true,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bookings: any[] = rawBookings.map((b: any) => ({
+    ...b,
+    bookedAt: new Date(b.bookedAt),
+    collectedAt: b.collectedAt ? new Date(b.collectedAt) : undefined,
+    meal: {
+      ...b.meal,
+      date: new Date(b.meal.date),
     },
-    orderBy: { bookedAt: "desc" },
-    take: 50,
-  });
+  }));
 
   const total = bookings.length;
-  const collected = bookings.filter((b) => b.status === "COLLECTED").length;
-  const pending = bookings.filter((b) => b.status === "BOOKED").length;
+  const collected = bookings.filter((b: any) => b.status === "COLLECTED").length;
+  const pending = bookings.filter((b: any) => b.status === "BOOKED").length;
 
   return (
     <div className="space-y-6 max-w-5xl mx-auto">
@@ -125,7 +134,7 @@ export default async function AdminBookingsPage({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {bookings.map((booking) => {
+                  {bookings.map((booking: any) => {
                     const isCollected = booking.status === "COLLECTED";
                     return (
                       <tr key={booking.id} className="hover:bg-slate-50/70">

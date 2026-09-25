@@ -2,23 +2,23 @@
 
 ## 1. Architectural Overview
 
-The Hostel Food Delivery & QR Food Collection System is a unified, full-stack monolith powered by the **Next.js 16 App Router** with **TypeScript** and **Tailwind CSS**. It combines two mission-critical campus operations:
+The Hostel Food Delivery & QR Food Collection System is a unified, full-stack monolith powered by the **Next.js 16 App Router** with **TypeScript**, **Custom Authentication (bcryptjs + HTTP-only session cookies)**, and **Neon PostgreSQL via Prisma ORM**. It combines two mission-critical campus operations:
 1. **Live Hostel Food Delivery Tracking:** Enforced finite state machine (`PREPARING` → `DISPATCHED` → `ON_THE_WAY` → `ARRIVED`, with `DELAYED` branch) with delay alerts and historical punctuality logs.
 2. **Food Booking & QR Collection:** Meal booking with time windows, duplicate booking prevention, opaque cryptographically generated QR passes, and atomic warden camera scanning with double-collection protection.
 
 ```mermaid
 graph TD
-    Client[Browser / Mobile Client] --> Middleware[Clerk Route Guard Middleware]
-    Middleware --> AppRouter[Next.js App Router]
+    Client[Browser / Mobile Client] --> Proxy[Next.js Proxy / Route Guard: proxy.ts]
+    Proxy --> AppRouter[Next.js App Router]
     
     subgraph Client & UI Layer
         StudentPortal[Student Portal: /student/*<br>- Live Tracker<br>- Book Meals<br>- QR Passes]
         AdminPortal[Admin Portal: /admin/*<br>- Live Delivery Console<br>- QR Camera Scanner<br>- Meal Scheduler]
-        PublicLanding[Landing / Auth Pages]
+        PublicLanding[Landing: / & Auth: /login, /register, /logout]
     end
     
     subgraph Server & Application Services
-        RoleGuard[Server Role Guard: lib/auth.ts]
+        AuthService[Custom Auth & Session Guard: lib/auth.ts, lib/session.ts]
         MealActions[Meal Actions: actions/meal.actions.ts]
         BookingActions[Booking Actions: actions/booking.actions.ts]
         ScannerActions[Scanner Actions: actions/scanner.actions.ts]
@@ -27,7 +27,7 @@ graph TD
     
     subgraph Data Layer
         PrismaClient[Prisma Client: lib/prisma.ts]
-        SQLite[(SQLite Database: prisma/dev.db)]
+        NeonPostgres[(Neon PostgreSQL Database)]
     end
     
     AppRouter --> StudentPortal
@@ -40,13 +40,13 @@ graph TD
     AdminPortal --> ScannerActions
     AdminPortal --> DeliveryActions
     
-    MealActions --> RoleGuard
-    BookingActions --> RoleGuard
-    ScannerActions --> RoleGuard
-    DeliveryActions --> RoleGuard
+    MealActions --> AuthService
+    BookingActions --> AuthService
+    ScannerActions --> AuthService
+    DeliveryActions --> AuthService
     
-    RoleGuard --> PrismaClient
-    PrismaClient --> SQLite
+    AuthService --> PrismaClient
+    PrismaClient --> NeonPostgres
 ```
 
 ---
@@ -54,7 +54,7 @@ graph TD
 ## 2. Directory Structure
 
 ```text
-CAT-WEB/
+MEALBITE/
 ├── .agents/                    # Agent persistent memory & operational rules
 │   ├── README.md
 │   ├── PROJECT_CONTEXT.md
@@ -63,38 +63,40 @@ CAT-WEB/
 │   ├── DATABASE_RULES.md
 │   ├── UI_RULES.md
 │   └── PROGRESS.md
-├── actions/                    # Next.js Server Actions (all mutations & data fetching)
+├── actions/                    # Next.js Server Actions (mutations & data fetching)
+│   ├── auth.actions.ts         # Custom login, register, logout, session check
 │   ├── booking.actions.ts      # Meal booking, passes, student history, auto-seeding
 │   ├── delivery.actions.ts     # Delivery state machine, live tracking, stats, alerts
-│   ├── meal.actions.ts         # Admin meal creation, schedule management
+│   ├── meal.actions.ts         # Admin meal creation, schedule & availability management
 │   └── scanner.actions.ts      # Atomic QR verification & food collection
 ├── app/                        # Next.js App Router
-│   ├── (auth)/                 # Clerk authentication routes
-│   │   ├── sign-in/[[...sign-in]]/page.tsx
-│   │   └── sign-up/[[...sign-up]]/page.tsx
+│   ├── (auth)/                 # Custom authentication routes
+│   │   ├── login/page.tsx      # Email & password login
+│   │   └── register/page.tsx   # Student account registration
 │   ├── admin/                  # Protected Warden / Admin Management
 │   │   ├── bookings/page.tsx   # All bookings & real-time collection status
 │   │   ├── dashboard/page.tsx  # Unified KPI dashboard (bookings + deliveries)
 │   │   ├── deliveries/page.tsx # Active delivery state machine controls
 │   │   ├── history/page.tsx    # Filterable delivery audit log
-│   │   ├── layout.tsx          # Server-side role guard (blocks student role)
+│   │   ├── layout.tsx          # Server-side requireAdmin() guard
 │   │   ├── meals/page.tsx      # Daily meal & booking window management
 │   │   └── scanner/page.tsx    # In-browser QR camera scanner + manual input
 │   ├── api/                    # Route Handlers
-│   │   └── health/route.ts     # Health check & SQLite database ping
+│   │   └── health/route.ts     # Health check & database ping
+│   ├── logout/page.tsx         # Secure session destruction & redirect
 │   ├── student/                # Protected Student Portal
 │   │   ├── book/page.tsx       # Daily meal booking view with countdown
 │   │   ├── bookings/page.tsx   # Active meal passes & past booking history
 │   │   ├── dashboard/page.tsx  # Live delivery tracker, active passes, delay banners
 │   │   ├── history/page.tsx    # Delivery punctuality history
-│   │   ├── layout.tsx          # Student base layout
+│   │   ├── layout.tsx          # Server-side requireAuth() guard
 │   │   └── pass/[id]/page.tsx  # Individual QR food collection pass
 │   ├── error.tsx               # Client error boundary
 │   ├── globals.css             # Tailwind CSS styles
-│   ├── layout.tsx              # Root HTML & ClerkProvider
+│   ├── layout.tsx              # Root layout (Navbar, MobileNav, session resolution)
 │   ├── loading.tsx             # Global loading skeleton
 │   ├── not-found.tsx           # 404 page
-│   ├── page.tsx                # Landing & role-based redirector
+│   ├── page.tsx                # Landing page with dynamic session status
 │   └── unauthorized/page.tsx   # Access forbidden handler
 ├── components/                 # Reusable UI Components
 │   ├── admin/                  # CreateDeliveryModal, DeliveryControlCard, QrScanner, CreateMealModal
@@ -103,22 +105,24 @@ CAT-WEB/
 │   ├── layout/                 # Navbar, MobileNav
 │   └── ui/                     # Button, Card, Badge
 ├── lib/                        # Core Utilities & Singletons
-│   ├── auth.ts                 # Server-side Clerk role resolution & user sync
-│   ├── constants.ts            # Enums, statuses, default values
+│   ├── auth.ts                 # getCurrentUser(), requireAuth(), requireAdmin(), requireRole()
+│   ├── password.ts             # bcryptjs password hashing and verification
+│   ├── session.ts              # HTTP-only session cookie creation and invalidation
 │   ├── prisma.ts               # PrismaClient connection singleton
 │   └── utils.ts                # cn helper, date & time formatters
-├── prisma/                     # Database Schema & SQLite File
-│   ├── dev.db                  # Local SQLite database file
-│   └── schema.prisma           # Prisma schema (User, Meal, Booking, Delivery, Notification)
+├── prisma/                     # Database Schema & Migrations
+│   ├── migrations/             # Neon PostgreSQL SQL migration history
+│   └── schema.prisma           # Prisma schema (User, Session, Meal, Booking, Delivery, Notification)
+├── proxy.ts                    # Edge proxy route guard for Next.js 16
 ├── scripts/                    # Maintenance & Setup Scripts
-│   └── make-admin.ts           # Clerk role metadata configuration check
+│   └── create-admin.ts         # Secure CLI script: npm run create-admin
 ├── test/                       # Verification Test Suites
-│   └── prisma-system.test.ts   # 16 automated tests verifying models, QR, transitions
+│   ├── auth-role.test.ts       # Role resolution & password hashing tests
+│   └── prisma-system.test.ts   # Neon PostgreSQL integration tests
 ├── types/                      # TypeScript Definitions
 │   ├── delivery.ts             # Meal, Booking, Delivery, Status enums & interfaces
 │   ├── index.ts                # Consolidated re-exports
-│   └── user.ts                 # UserRole & IUser definitions
-├── middleware.ts               # Clerk route protection middleware
+│   └── user.ts                 # UserRole & UserSessionProfile definitions
 ├── package.json
 └── tsconfig.json               # Strict TypeScript config
 ```
@@ -153,35 +157,6 @@ const updateResult = await prisma.booking.updateMany({
 - If `updateResult.count === 0`: The booking either does not exist or has already transitioned to `COLLECTED` or `CANCELLED`. A subsequent query checks the current state and returns an immediate rejection:
   > *"ALREADY COLLECTED: This food pass was already collected on [Timestamp] by [Warden]. Multiple collections are strictly prohibited."*
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Student
-    actor Warden
-    participant Scanner as Warden Scanner (/admin/scanner)
-    participant Server as Server Action (verifyAndCollectQrAction)
-    participant DB as SQLite (Prisma)
-
-    Student->>Server: bookMealAction(mealId)
-    Server->>DB: Check booking window & existing booking
-    Server->>DB: prisma.booking.create({ qrToken, status: 'BOOKED' })
-    DB-->>Server: Booking record
-    Server-->>Student: QR Food Pass (/student/pass/[id])
-
-    Warden->>Scanner: Scan Student QR Pass (html5-qrcode / manual)
-    Scanner->>Server: verifyAndCollectQrAction(qrToken)
-    Server->>DB: updateMany({ where: { qrToken, status: 'BOOKED' }, data: { status: 'COLLECTED' } })
-    alt count == 1 (First Scan)
-        DB-->>Server: Success (count = 1)
-        Server-->>Scanner: 200 OK: "Food Collected Successfully" (Green)
-    else count == 0 (Duplicate Scan or Invalid)
-        DB-->>Server: Ignored (count = 0)
-        Server->>DB: Query current booking status
-        DB-->>Server: Status is already 'COLLECTED'
-        Server-->>Scanner: 400 Rejected: "ALREADY COLLECTED at [Timestamp]" (Red)
-    end
-```
-
 ---
 
 ## 4. Delivery Status State Machine
@@ -210,6 +185,8 @@ stateDiagram-v2
 
 ## 5. Security & Isolation Principles
 
-1. **Zero Client-Side Trust:** Roles and user IDs are resolved purely on the server through Clerk JWT tokens and verified in `lib/auth.ts`.
-2. **Unique Booking Enforcement:** Database level `@@unique([userId, mealId])` guarantees no duplicate bookings can ever be written for the same student on the same meal.
-3. **Admin Role Guard:** The authenticated user's current Clerk `publicMetadata.role` is resolved server-side. Only `role === "admin"` receives admin access; missing or invalid values resolve to `student`.
+1. **Zero Client-Side Trust:** Roles and user IDs are resolved purely on the server via `getCurrentUser()` querying active sessions in PostgreSQL.
+2. **Password Protection:** Plaintext passwords are never stored; passwords are salted and hashed using `bcryptjs`.
+3. **Session Security:** Sessions use random 256-bit tokens stored in secure, `HttpOnly`, `SameSite=Lax` cookies with server-side validation and expiration.
+4. **Unique Booking Enforcement:** Database level `@@unique([userId, mealId])` guarantees no duplicate bookings can ever be written for the same student on the same meal.
+5. **Admin Role Guard:** Only accounts with `role === "ADMIN"` can access `/admin/*` or invoke administrative server actions. Students attempting access are redirected or rejected.

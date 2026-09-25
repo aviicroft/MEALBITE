@@ -1,14 +1,13 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
+import { sql } from "@/lib/db";
 
 export async function GET() {
   let dbStatus = "not_checked";
   let dbError = null;
 
   try {
-    // Perform a lightweight SQLite query
-    await prisma.$queryRaw`SELECT 1`;
-    dbStatus = "connected (SQLite + Prisma)";
+    await sql`SELECT 1 as ping`;
+    dbStatus = "connected (Neon PostgreSQL Serverless)";
   } catch (error) {
     dbStatus = "connection_failed";
     dbError = error instanceof Error ? error.message : "Unknown error";
@@ -19,7 +18,7 @@ export async function GET() {
     timestamp: new Date().toISOString(),
     service: "Hostel Food Delivery Tracking System",
     database: {
-      engine: "SQLite",
+      engine: "Neon PostgreSQL",
       status: dbStatus,
       error: dbError,
     },

@@ -3,25 +3,24 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useUser } from "@clerk/nextjs";
 import { LayoutDashboard, History, ShieldAlert, Truck, UtensilsCrossed } from "lucide-react";
+import { UserSessionProfile, isAdminRole } from "@/types/user";
 
 interface MobileNavProps {
-  userRole?: "student" | "admin" | null;
+  user?: UserSessionProfile | null;
+  userRole?: string | null;
 }
 
-export const MobileNav: React.FC<MobileNavProps> = ({ userRole }) => {
+export const MobileNav: React.FC<MobileNavProps> = ({ user, userRole }) => {
   const pathname = usePathname();
-  const { isSignedIn } = useUser();
 
+  const isSignedIn = !!user;
   if (!isSignedIn) {
     return null;
   }
 
-  // Authorization is resolved server-side. Never derive admin access from client data.
-  const effectiveRole = userRole || "student";
-
-  const isAdmin = effectiveRole === "admin";
+  const effectiveRole = user?.role || userRole;
+  const isAdmin = isAdminRole(effectiveRole);
 
   const studentLinks = [
     { href: "/student/dashboard", label: "Status", icon: LayoutDashboard },

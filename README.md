@@ -1,4 +1,4 @@
-# Hostel Food Delivery & QR Food Collection System
+# Hostel Food Delivery & QR Food Collection System (MealBite)
 
 A modern, full-stack, mobile-first web application designed for university and college residential hostels. It combines two core campus food operations into a single platform:
 1. **Live Hostel Food Delivery Tracking:** Allows students to track meal catering deliveries in real-time from the central kitchen to the hostel gate with milestone timelines and instant delay alerts.
@@ -9,7 +9,8 @@ A modern, full-stack, mobile-first web application designed for university and c
 ## 1. Key Features
 
 ### For Students
-- **Daily Meal Booking:** Browse daily menus (Breakfast, Lunch, Dinner) and book meals within active booking windows (`/student/book`).
+- **Custom Authentication:** Secure registration and login (`/register`, `/login`) with password hashing and HTTP-only session cookies.
+- **Daily Meal Booking:** Browse daily menus (Breakfast, Lunch, Snacks, Dinner) and book meals within active booking windows (`/student/book`).
 - **Cryptographic QR Food Pass:** Receive an opaque QR pass (`/student/pass/[id]`) that contains zero personal data and displays live collection status.
 - **Active Passes & History:** View active tokens and historical collection records with timestamps (`/student/bookings`).
 - **Live Delivery Tracking:** Follow catering vehicle progress along the delivery lifecycle (`PREPARING` → `DISPATCHED` → `ON_THE_WAY` → `ARRIVED`) (`/student/dashboard`).
@@ -17,9 +18,10 @@ A modern, full-stack, mobile-first web application designed for university and c
 - **Delivery Punctuality Log:** Filterable historical delivery logs (`/student/history`).
 
 ### For Wardens & Mess Administrators
+- **Warden Administration:** Secure admin login with server-verified `ADMIN` role.
 - **In-Browser QR Scanner:** Fast, camera-driven QR code scanner (`html5-qrcode`) with manual fallback to scan student meal passes (`/admin/scanner`).
 - **Atomic Double-Collection Guard:** Concurrent-safe verification that rejects duplicate scans with the exact previous collection timestamp.
-- **Meal Schedule Manager:** Create meals with custom menus and booking cutoff windows (`/admin/meals`).
+- **Meal Schedule & Availability:** Create meals with custom menus, booking cutoff windows, and food availability (`AVAILABLE` / `FINISHED`) (`/admin/meals`).
 - **Booking Overview:** Live view of all bookings, collected meals, and pending collections (`/admin/bookings`).
 - **Delivery Control Console:** Create and update catering delivery runs along the finite state machine (`/admin/deliveries`).
 - **Unified KPI Dashboard:** High-level metrics for today's meals, bookings, collections, and active deliveries (`/admin/dashboard`).
@@ -31,10 +33,10 @@ A modern, full-stack, mobile-first web application designed for university and c
 - **Framework:** [Next.js](https://nextjs.org/) 16 (App Router with Turbopack & React Server Components)
 - **Language:** [TypeScript](https://www.typescriptlang.org/) (Strict mode enabled)
 - **Styling:** [Tailwind CSS](https://tailwindcss.com/) v4
-- **Database:** [SQLite](https://www.sqlite.org/) (Embedded local database at `prisma/dev.db`)
+- **Database:** [Neon PostgreSQL](https://neon.tech/) (Cloud serverless PostgreSQL)
 - **ORM:** [Prisma](https://www.prisma.io/) v6
-- **Authentication:** [Clerk](https://clerk.com/) (session management and server-side public metadata role authorization)
-- **QR Code Engine:** `qrcode` (SVG/Canvas generation) and `html5-qrcode` (camera scanning)
+- **Authentication:** Custom server-side authentication (bcryptjs + HTTP-only sessions)
+- **QR Code Engine:** `qrcode` (generation) and `html5-qrcode` (camera scanning)
 - **Icons:** [Lucide React](https://lucide.dev/)
 
 ---
@@ -43,7 +45,7 @@ A modern, full-stack, mobile-first web application designed for university and c
 
 ```prisma
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -52,43 +54,56 @@ generator client {
 }
 
 model User {
-  id           String     @id @default(cuid())
-  clerkUserId  String     @unique
+  id           String    @id @default(cuid())
   name         String
-  email        String     @unique
-  studentId    String?
+  email        String    @unique
+  passwordHash String
+  studentId    String?   @unique
   roomNumber   String?
-  role         String     @default("student") // "student" | "admin"
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  role         String    @default("STUDENT") // STUDENT, ADMIN
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
   bookings     Booking[]
-  createdMeals Meal[]     @relation("MealCreator")
+  sessions     Session[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
 }
 
 model Meal {
   id           String     @id @default(cuid())
   date         DateTime
-  type         String     // "BREAKFAST" | "LUNCH" | "DINNER"
+  type         String     // BREAKFAST, LUNCH, SNACKS, DINNER
   menu         String
+  availability String     @default("AVAILABLE") // AVAILABLE, FINISHED
   bookingOpen  DateTime
   bookingClose DateTime
   createdAt    DateTime   @default(now())
-  createdById  String?
-  createdBy    User?      @relation("MealCreator", fields: [createdById], references: [id])
   bookings     Booking[]
+  deliveries   Delivery[]
 }
 
 model Booking {
   id          String    @id @default(cuid())
   userId      String
   mealId      String
+  status      String    @default("BOOKED") // BOOKED, COLLECTED, CANCELLED, EXPIRED
   qrToken     String    @unique
-  status      String    @default("BOOKED") // "BOOKED" | "COLLECTED" | "CANCELLED"
-  bookingTime DateTime  @default(now())
+  bookedAt    DateTime  @default(now())
   collectedAt DateTime?
   collectedBy String?
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  meal        Meal      @relation(fields: [mealId], references: [id], onDelete: Cascade)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  meal Meal @relation(fields: [mealId], references: [id], onDelete: Cascade)
 
   @@unique([userId, mealId])
   @@index([qrToken])
@@ -96,31 +111,32 @@ model Booking {
 }
 
 model Delivery {
-  id                  String         @id @default(cuid())
-  mealType            String         // "BREAKFAST" | "LUNCH" | "SNACKS" | "DINNER"
-  date                DateTime
-  targetHostel        String         @default("All Hostels")
-  status              String         @default("PREPARING") // "PREPARING" | "DISPATCHED" | "ON_THE_WAY" | "ARRIVED" | "DELAYED"
+  id                  String    @id @default(cuid())
+  mealId              String?
+  mealType            String    // BREAKFAST, LUNCH, SNACKS, DINNER
+  deliveryDate        DateTime
+  targetHostel        String    @default("All Hostels")
+  status              String    @default("PREPARING") // PREPARING, DISPATCHED, ON_THE_WAY, ARRIVED, DELAYED
   dispatchTime        DateTime?
   expectedArrivalTime DateTime
   actualArrivalTime   DateTime?
-  isDelayed           Boolean        @default(false)
-  delayReason         String?
-  notes               String?
-  createdByClerkId    String
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
-  notifications       Notification[]
+  isDelayed           Boolean   @default(false)
+  delayReason         String    @default("")
+  notes               String    @default("")
+  updatedBy           String    @default("admin")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  meal Meal? @relation(fields: [mealId], references: [id], onDelete: SetNull)
 }
 
 model Notification {
-  id         String    @id @default(cuid())
-  title      String
-  message    String
-  type       String    @default("STATUS_UPDATE") // "STATUS_UPDATE" | "DELAY_ALERT" | "ARRIVAL"
-  deliveryId String?
-  delivery   Delivery? @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
-  createdAt  DateTime  @default(now())
+  id        String   @id @default(cuid())
+  title     String
+  message   String
+  type      String   @default("STATUS_UPDATE")
+  mealType  String?
+  createdAt DateTime @default(now())
 }
 ```
 
@@ -128,118 +144,78 @@ model Notification {
 
 ## 4. Environment Variables
 
-Create a `.env` (or `.env.local`) file in the project root:
+Create a `.env` file in the project root based on `.env.example`:
 
 ```env
-# Database: Local SQLite file
-DATABASE_URL="file:./dev.db"
+# Neon PostgreSQL Database Connection URL
+# Format: postgresql://[user]:[password]@[endpoint].neon.tech/[dbname]?sslmode=require
+DATABASE_URL="postgresql://neondb_owner:password@ep-example-123456.us-east-2.aws.neon.tech/neondb?sslmode=require"
 
-# Clerk Authentication (from https://dashboard.clerk.com)
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
-CLERK_SECRET_KEY=sk_test_...
+# Initial Administrator Credentials (used by: npm run create-admin)
+ADMIN_EMAIL="admin@hostel.edu"
+ADMIN_PASSWORD="SecureAdminPassword123!"
 
-# Clerk URL Routing
-NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
-NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
-NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/student/dashboard
-NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/student/dashboard
+# Session Secret Key
+SESSION_SECRET="your-secure-session-secret-random-string-at-least-32-characters"
 ```
 
 ---
 
-## 5. Quickstart & Installation
+## 5. Local Development Setup
 
+### Prerequisites
+- Node.js 18+ installed
+- A Neon PostgreSQL database (from https://neon.tech)
+
+### 1. Install Dependencies
 ```bash
-# 1. Install dependencies
 npm install
-
-# 2. Push schema to SQLite database (generates prisma/dev.db)
-npx prisma db push
-
-# 3. Set the Clerk user's public metadata to { "role": "admin" } for admin access.
-
-# 4. Run automated test suites
-npm test
-
-# 5. Start development server
-npm run dev
-
-# 6. Build and start production bundle
-npm run build
-npm start
 ```
 
-## Vercel Deployment
+### 2. Configure Environment
+Set `DATABASE_URL` in `.env` to your Neon PostgreSQL connection string.
 
-1. Import the repository into Vercel and keep the framework preset as **Next.js**.
-2. Configure these Vercel environment variables for the Production environment:
-   - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
-   - `CLERK_SECRET_KEY`
-   - `DATABASE_URL`
-   - `NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in`
-   - `NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up`
-   - `NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/student/dashboard`
-   - `NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/student/dashboard`
-3. Use production Clerk keys (`pk_live_...` and `sk_live_...`) in Vercel, not the local development keys. Add the Vercel deployment URL to Clerk's allowed origins/redirect settings.
-4. Set the administrator's Clerk public metadata to `{ "role": "admin" }`. The application reads this value from Clerk's server-side user object; missing or invalid values resolve to `student`.
-5. Verify the deployed application is using the same Clerk Production instance where the user exists and where the metadata is set. A local `pk_test_...` key and a Vercel `pk_live_...` key address different Clerk instances, even for the same email address.
-6. Set `DATABASE_URL` to a persistent hosted database URL before production use. The current SQLite file configuration (`file:./dev.db`) is local filesystem storage and is not persistent across Vercel deployments/functions.
-7. Deploy after `npm install`, `npx prisma generate`, and `npm run build` pass locally.
-
-### SQLite production limitation
-
-Do not use `DATABASE_URL=file:./dev.db` for a production Vercel deployment. Vercel's serverless filesystem is ephemeral, so SQLite writes can disappear between deployments or function instances and cannot provide reliable shared application storage. The application still uses SQLite locally as required; production should migrate Prisma to a persistent hosted database such as Neon Postgres, Supabase Postgres, or another Prisma-supported managed provider before launch.
-
----
-
-## 6. Key Application Routes
-
-### Student Routes
-| Route | Description |
-| --- | --- |
-| `/student/dashboard` | Main student hub: live catering delivery status, delay alerts, active meal passes. |
-| `/student/book` | Daily meal booking interface with countdown timers and menu details. |
-| `/student/pass/[id]` | High-resolution QR food pass with live collection status. |
-| `/student/bookings` | Active and past booking passes with statuses. |
-| `/student/history` | Historical meal delivery arrival logs with search filters. |
-
-### Admin & Warden Routes
-| Route | Description |
-| --- | --- |
-| `/admin/dashboard` | Unified operational KPIs (meals, bookings, collections, deliveries). |
-| `/admin/scanner` | In-browser QR camera scanner with manual fallback and double-collection guard. |
-| `/admin/meals` | Daily meal scheduling and booking cutoff management. |
-| `/admin/bookings` | Comprehensive table of student bookings and collection timestamps. |
-| `/admin/deliveries` | Catering delivery session manager with state machine transition controls. |
-| `/admin/history` | Chronological delivery audit logs. |
-
----
-
-## 7. How QR Verification Works
-
-1. **Student Books Meal:** A cryptographically random 48-char opaque token is generated server-side. Zero student personal data is stored in the QR code.
-2. **Student Arrives at Mess:** Student shows the QR pass on their phone at `/student/pass/[id]`.
-3. **Warden Scans Pass:** Warden points device camera at student's screen using `/admin/scanner`.
-4. **Atomic Collection:** Server runs `prisma.booking.updateMany({ where: { qrToken, status: 'BOOKED' }, data: { status: 'COLLECTED' } })`.
-   - **First Scan:** Updates 1 row. Warden gets a green confirmation with student details. Student pass updates to "SUCCESS: Food Collected".
-   - **Subsequent Scan:** Updates 0 rows. Warden immediately receives a red alert indicating the meal was already collected along with the original collection time and warden name.
-
----
-
-## 8. Verification & Testing
-
-The system includes a complete automated test suite verifying both SQLite Prisma operations and the delivery state machine:
-
+### 3. Apply Database Migrations
 ```bash
-npx tsx test/prisma-system.test.ts
+npx prisma migrate deploy
+# Or apply locally with:
+npx prisma db push
 ```
 
-Tests cover:
-- User creation and role assignments (`student` vs `admin`)
-- Meal creation and booking window constraints
-- Duplicate booking prevention (`@@unique([userId, mealId])`)
-- Opaque 48-character QR token generation
-- Successful atomic meal collection
-- Immediate rejection of double-collection attempts
-- Delivery state machine progression (`PREPARING` → `DISPATCHED` → `ON_THE_WAY` → `ARRIVED`)
-- Delivery delay handling and notifications
+### 4. Create Initial Administrator Account
+```bash
+npm run create-admin
+```
+This script reads `ADMIN_EMAIL` and `ADMIN_PASSWORD` from `.env` or prompts interactively.
+
+### 5. Start Development Server
+```bash
+npm run dev
+```
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+---
+
+## 6. Authentication & Roles
+
+### Authentication Flow
+- **Registration (`/register`):** Student signs up with Name, Email, Password, Student ID, and Room Number. Passwords are securely hashed with bcrypt. The account is created with `role: "STUDENT"`.
+- **Login (`/login`):** Users enter Email and Password. Upon validation, a cryptographically secure random session token is generated, stored in PostgreSQL, and set as an HTTP-only cookie (`mealbite_session`).
+- **Logout (`/logout`):** Destroys the session in PostgreSQL and clears the HTTP-only cookie.
+- **Server Guard (`lib/auth.ts`):** `getCurrentUser()`, `requireAuth()`, and `requireAdmin()` validate sessions on the server without trusting client claims.
+
+### Application Roles
+- **STUDENT:** Can view status, book available meals, view passes, and view history. Blocked from admin routes.
+- **ADMIN:** Full mess management: schedule meals, toggle availability, advance deliveries, scan QR passes, and audit bookings.
+
+---
+
+## 7. Production Deployment (Vercel)
+
+1. Connect your repository to Vercel.
+2. In the Vercel Project Settings under **Environment Variables**, add:
+   - `DATABASE_URL`: Your production Neon PostgreSQL connection string (`?sslmode=require`).
+   - `SESSION_SECRET`: A random 32+ character string.
+3. Build & Deploy:
+   - Build Command: `npm run build`
+4. Run `npm run create-admin` or execute migrations via `npx prisma migrate deploy`.

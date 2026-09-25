@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { currentUser } from "@clerk/nextjs/server";
+import { getCurrentUser } from "@/lib/auth";
 import {
   Calendar,
   MapPin,
@@ -24,7 +24,7 @@ import { formatDate, formatTime } from "@/lib/utils";
 export const dynamic = "force-dynamic";
 
 export default async function StudentDashboardPage() {
-  const user = await currentUser();
+  const user = await getCurrentUser();
   const [liveDelivery, notifications, availableMeals, activeBookings] =
     await Promise.all([
       getLiveDeliveryAction(),
@@ -68,7 +68,7 @@ export default async function StudentDashboardPage() {
             Student Dining Hub
           </span>
           <h1 className="text-xl font-bold text-slate-900 mt-0.5">
-            {user?.firstName ? `Welcome back, ${user.firstName}!` : "Hostel Dining Portal"}
+            {user?.name ? `Welcome back, ${user.name}!` : "Hostel Dining Portal"}
           </h1>
           <div className="flex flex-wrap items-center gap-4 text-xs text-slate-500 mt-2">
             <span className="flex items-center gap-1">
