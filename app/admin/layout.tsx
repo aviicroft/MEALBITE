@@ -1,7 +1,7 @@
 import React from "react";
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
-import { getCurrentUserRole, syncCurrentUser } from "@/lib/auth";
+import { requireRole, syncCurrentUser } from "@/lib/auth";
 import { ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 
@@ -16,12 +16,8 @@ export default async function AdminLayout({
     redirect("/sign-in");
   }
 
-  // Server-side role resolution - strict enforcement
-  const role = await getCurrentUserRole();
-
-  if (role !== "admin") {
-    redirect("/unauthorized");
-  }
+  // Server-side Clerk public metadata enforcement.
+  await requireRole(["admin"]);
 
   // Auto-sync admin user profile with MongoDB User model
   try {

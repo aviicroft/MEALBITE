@@ -1,8 +1,8 @@
 # Project Progress & Roadmap
 
 **Project:** Hostel Food Delivery Tracking & QR Food Collection System  
-**Current Status:** Food availability controls implemented and ready for verification
-**Last Updated:** Food Availability feature added
+**Current Status:** Clerk public metadata role authorization fixed
+**Last Updated:** Live Clerk role resolution corrected
 
 ---
 
@@ -62,6 +62,11 @@
 - Meals now have a controlled `AVAILABLE` / `FINISHED` availability value, persisted in Prisma/SQLite.
 - Students see the food state and cannot create new bookings when food is finished; server-side booking validation enforces the restriction.
 - Admins can toggle availability from the meal management page. Existing `BOOKED` records remain scannable and collectible.
+
+### 2.7 Admin Authorization
+- Root cause: the application was resolving roles from an `ADMIN_EMAIL` allowlist and intentionally ignoring Clerk `publicMetadata.role`, so Clerk admin users were displayed as students.
+- Fix: server-side role resolution now reads the live Clerk `currentUser().publicMetadata.role` using the installed Clerk SDK. `admin` resolves to `admin`; missing or invalid values safely resolve to `student`.
+- Admin layouts and server actions continue to use `requireRole(["admin"])`; client-provided roles and stale session claims are not trusted.
 
 ### 2.6 Testing & Verification
 - **Automated Test Suite:** 16 passing tests in `test/prisma-system.test.ts` covering user sync, booking window validation, duplicate booking prevention, opaque QR generation, atomic food collection, double-collection rejection, and delivery state transitions.

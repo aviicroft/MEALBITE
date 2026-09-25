@@ -111,7 +111,7 @@ CAT-WEB/
 │   ├── dev.db                  # Local SQLite database file
 │   └── schema.prisma           # Prisma schema (User, Meal, Booking, Delivery, Notification)
 ├── scripts/                    # Maintenance & Setup Scripts
-│   └── make-admin.ts           # Admin elevation CLI script
+│   └── make-admin.ts           # Clerk role metadata configuration check
 ├── test/                       # Verification Test Suites
 │   └── prisma-system.test.ts   # 16 automated tests verifying models, QR, transitions
 ├── types/                      # TypeScript Definitions
@@ -212,4 +212,4 @@ stateDiagram-v2
 
 1. **Zero Client-Side Trust:** Roles and user IDs are resolved purely on the server through Clerk JWT tokens and verified in `lib/auth.ts`.
 2. **Unique Booking Enforcement:** Database level `@@unique([userId, mealId])` guarantees no duplicate bookings can ever be written for the same student on the same meal.
-3. **Admin Elevation Guard:** Warden roles are controlled via Clerk user metadata (`{ "role": "admin" }`) or via the verified CLI script `scripts/make-admin.ts`.
+3. **Admin Role Guard:** The authenticated user's current Clerk `publicMetadata.role` is resolved server-side. Only `role === "admin"` receives admin access; missing or invalid values resolve to `student`.

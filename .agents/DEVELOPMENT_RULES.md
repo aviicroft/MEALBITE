@@ -47,8 +47,9 @@ All contributors and automated agents must adhere to these 20 development rules 
 - Always authenticate user with Clerk `auth()` at the start of every Server Action.
 - Verify role membership before performing administrative mutations:
   ```typescript
-  const { userId, sessionClaims } = await auth();
+  const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
-  if (sessionClaims?.metadata?.role !== 'admin') throw new Error("Forbidden");
+  const role = await getCurrentUserRole();
+  if (role !== "admin") throw new Error("Forbidden");
   ```
 - Return structured responses: `{ success: boolean; data?: T; error?: string }`.

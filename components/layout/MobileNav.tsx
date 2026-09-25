@@ -12,15 +12,14 @@ interface MobileNavProps {
 
 export const MobileNav: React.FC<MobileNavProps> = ({ userRole }) => {
   const pathname = usePathname();
-  const { isSignedIn, user } = useUser();
+  const { isSignedIn } = useUser();
 
   if (!isSignedIn) {
     return null;
   }
 
-  const effectiveRole =
-    userRole ||
-    ((user?.publicMetadata?.role as "student" | "admin") || "student");
+  // Authorization is resolved server-side. Never derive admin access from client data.
+  const effectiveRole = userRole || "student";
 
   const isAdmin = effectiveRole === "admin";
 

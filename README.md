@@ -33,7 +33,7 @@ A modern, full-stack, mobile-first web application designed for university and c
 - **Styling:** [Tailwind CSS](https://tailwindcss.com/) v4
 - **Database:** [SQLite](https://www.sqlite.org/) (Embedded local database at `prisma/dev.db`)
 - **ORM:** [Prisma](https://www.prisma.io/) v6
-- **Authentication:** [Clerk](https://clerk.com/) (Session management and server-side role resolution)
+- **Authentication:** [Clerk](https://clerk.com/) (session management and server-side public metadata role authorization)
 - **QR Code Engine:** `qrcode` (SVG/Canvas generation) and `html5-qrcode` (camera scanning)
 - **Icons:** [Lucide React](https://lucide.dev/)
 
@@ -156,8 +156,7 @@ npm install
 # 2. Push schema to SQLite database (generates prisma/dev.db)
 npx prisma db push
 
-# 3. (Optional) Make a registered user an administrator
-npx tsx scripts/make-admin.ts <user-email-or-clerk-id>
+# 3. Set the Clerk user's public metadata to { "role": "admin" } for admin access.
 
 # 4. Run automated test suites
 npm test
@@ -169,6 +168,26 @@ npm run dev
 npm run build
 npm start
 ```
+
+## Vercel Deployment
+
+1. Import the repository into Vercel and keep the framework preset as **Next.js**.
+2. Configure these Vercel environment variables for the Production environment:
+   - `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`
+   - `CLERK_SECRET_KEY`
+   - `DATABASE_URL`
+   - `NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in`
+   - `NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up`
+   - `NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL=/student/dashboard`
+   - `NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/student/dashboard`
+3. Use production Clerk keys (`pk_live_...` and `sk_live_...`) in Vercel, not the local development keys. Add the Vercel deployment URL to Clerk's allowed origins/redirect settings.
+4. Set the administrator's Clerk public metadata to `{ "role": "admin" }`. The application reads this value from Clerk's server-side user object; missing or invalid values resolve to `student`.
+5. Set `DATABASE_URL` to a persistent hosted database URL before production use. The current SQLite file configuration (`file:./dev.db`) is local filesystem storage and is not persistent across Vercel deployments/functions.
+6. Deploy after `npm install`, `npx prisma generate`, and `npm run build` pass locally.
+
+### SQLite production limitation
+
+Do not use `DATABASE_URL=file:./dev.db` for a production Vercel deployment. Vercel's serverless filesystem is ephemeral, so SQLite writes can disappear between deployments or function instances and cannot provide reliable shared application storage. The application still uses SQLite locally as required; production should migrate Prisma to a persistent hosted database such as Neon Postgres, Supabase Postgres, or another Prisma-supported managed provider before launch.
 
 ---
 

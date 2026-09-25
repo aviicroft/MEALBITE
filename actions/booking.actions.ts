@@ -5,7 +5,7 @@ import QRCode from "qrcode";
 import { revalidatePath } from "next/cache";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
-import { syncCurrentUser } from "@/lib/auth";
+import { getCurrentUserRole, syncCurrentUser } from "@/lib/auth";
 import { IMeal, IBooking } from "@/types/delivery";
 
 /**
@@ -326,7 +326,8 @@ export async function getBookingPassAction(bookingId: string) {
   if (!booking) throw new Error("Booking pass not found");
 
   // Only the booked student or an admin can view this pass
-  if (user?.role !== "admin" && booking.userId !== user?.id) {
+  const role = await getCurrentUserRole();
+  if (role !== "admin" && booking.userId !== user?.id) {
     throw new Error("UNAUTHORIZED_PASS_ACCESS");
   }
 

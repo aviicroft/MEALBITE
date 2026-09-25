@@ -2,49 +2,43 @@ import { auth, currentUser } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
 import { UserRole, UserSessionProfile } from "@/types/user";
 
+export function resolveRoleFromPublicMetadata(role: unknown): UserRole {
+  return role === "admin" ? "admin" : "student";
+}
+
 /**
- * Server-side helper to resolve the authenticated user's role securely.
- * Priority:
- * 1. Clerk session token claims (sessionClaims?.metadata?.role / publicMetadata?.role)
- * 2. Database lookup in SQLite User table (authoritative application profile)
- * Fallback: 'student' if authenticated, null if unauthenticated.
+ * Resolves the application role from the current Clerk user on the server.
+ * The live Clerk user object is preferred over session claims so metadata changes
+ * are not masked by stale claims.
  */
 export async function getCurrentUserRole(): Promise<UserRole | null> {
-  const { userId, sessionClaims } = await auth();
+  const { userId } = await auth();
 
   if (!userId) {
     return null;
   }
 
-  // Check claims if metadata was embedded in JWT
-  const metadata = (sessionClaims?.metadata || sessionClaims?.publicMetadata) as
-    | { role?: string }
-    | undefined;
-
-  if (metadata?.role === "admin" || metadata?.role === "student") {
-    return metadata.role as UserRole;
-  }
-
-  // Database fallback if role is stored in SQLite
   try {
-    const dbUser = await prisma.user.findUnique({
-      where: { clerkUserId: userId },
-      select: { role: true },
+    const clerkUser = await currentUser();
+    const publicMetadataRole = clerkUser?.publicMetadata?.role;
+    const resolvedRole = resolveRoleFromPublicMetadata(publicMetadataRole);
+
+    console.info("[auth] Clerk role resolution", {
+      clerkUserId: userId,
+      publicMetadataRole,
+      resolvedRole,
     });
 
-    if (dbUser?.role === "admin" || dbUser?.role === "student") {
-      return dbUser.role as UserRole;
-    }
-  } catch (error) {
-    console.error("Error retrieving user role from database:", error);
+    return resolvedRole;
+  } catch {
+    console.error("Error resolving authenticated user role.");
+    return "student";
   }
-
-  return "student";
 }
 
 /**
- * Synchronizes the currently authenticated Clerk user with SQLite User table.
- * Creates a record if it does not exist, or updates name/email if changed.
+ * Synchronizes the authenticated Clerk user with the local application profile.
+ * The persisted role is informational; authorization always uses live Clerk data.
  */
 export async function syncCurrentUser(): Promise<UserSessionProfile | null> {
   const { userId } = await auth();
@@ -56,29 +50,21 @@ export async function syncCurrentUser(): Promise<UserSessionProfile | null> {
   const email =
     clerkUser.emailAddresses[0]?.emailAddress ||
     `${clerkUser.id}@hostel.placeholder`;
-
   const name =
     [clerkUser.firstName, clerkUser.lastName].filter(Boolean).join(" ") ||
     clerkUser.username ||
     "Hostel Resident";
-
-  // Check if role is present in Clerk publicMetadata
-  const clerkMetadataRole = (clerkUser.publicMetadata?.role as string) || "";
-  const initialRole: UserRole =
-    clerkMetadataRole === "admin" ? "admin" : "student";
+  const role = resolveRoleFromPublicMetadata(clerkUser.publicMetadata?.role);
 
   try {
     const updatedUser = await prisma.user.upsert({
       where: { clerkUserId: userId },
-      update: {
-        name,
-        email,
-      },
+      update: { name, email, role },
       create: {
         clerkUserId: userId,
         name,
         email,
-        role: initialRole,
+        role,
         studentId: "",
         roomNumber: "",
       },
@@ -88,7 +74,7 @@ export async function syncCurrentUser(): Promise<UserSessionProfile | null> {
       clerkUserId: userId,
       name: updatedUser.name,
       email: updatedUser.email,
-      role: updatedUser.role as UserRole,
+      role,
       studentId: updatedUser.studentId,
       roomNumber: updatedUser.roomNumber,
     };
@@ -98,14 +84,13 @@ export async function syncCurrentUser(): Promise<UserSessionProfile | null> {
       clerkUserId: userId,
       name,
       email,
-      role: initialRole,
+      role,
     };
   }
 }
 
 /**
- * Strict server-side role guard.
- * Call inside Server Actions or Server Component layouts to guarantee user authorization.
+ * Strict server-side role guard for pages and server actions.
  */
 export async function requireRole(allowedRoles: UserRole[]): Promise<{
   userId: string;

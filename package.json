@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx test/prisma-system.test.ts",
+    "test": "tsx test/prisma-system.test.ts && tsx test/auth-role.test.ts",
     "make-admin": "tsx scripts/make-admin.ts"
   },
   "dependencies": {

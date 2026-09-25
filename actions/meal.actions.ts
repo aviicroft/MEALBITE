@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { auth } from "@clerk/nextjs/server";
 import { prisma } from "@/lib/prisma";
-import { getCurrentUserRole } from "@/lib/auth";
+import { getCurrentUserRole, requireRole } from "@/lib/auth";
 import { IMeal, MealAvailability, MealType } from "@/types/delivery";
 
 export async function createMealAction(formData: {
@@ -91,6 +91,8 @@ export async function createMealAction(formData: {
 }
 
 export async function getAdminMealsAction(): Promise<IMeal[]> {
+  await requireRole(["admin"]);
+
   try {
     const meals = await prisma.meal.findMany({
       orderBy: { date: "desc" },
@@ -137,6 +139,8 @@ export async function updateMealAvailabilityAction(
 }
 
 export async function getMealBookingsAction(mealId: string) {
+  await requireRole(["admin"]);
+
   try {
     const bookings = await prisma.booking.findMany({
       where: { mealId },

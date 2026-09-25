@@ -25,10 +25,8 @@ export const Navbar: React.FC<NavbarProps> = ({ userRole }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { isSignedIn, user, isLoaded } = useUser();
 
-  // If role wasn't passed down via server prop, read from client metadata
-  const effectiveRole =
-    userRole ||
-    ((user?.publicMetadata?.role as "student" | "admin") || "student");
+  // Authorization is resolved server-side. Never derive admin access from client data.
+  const effectiveRole = userRole || "student";
 
   const isAdmin = effectiveRole === "admin";
 

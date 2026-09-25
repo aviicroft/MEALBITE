@@ -109,6 +109,8 @@ export async function getDeliveryHistoryAction(
  * Fetch comprehensive admin dashboard statistics
  */
 export async function getAdminDashboardStatsAction(): Promise<DashboardStats> {
+  await requireRole(["admin"]);
+
   try {
     await seedDefaultMealsIfEmpty();
 
