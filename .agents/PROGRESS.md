@@ -67,6 +67,7 @@
 - Root cause: the application was resolving roles from an `ADMIN_EMAIL` allowlist and intentionally ignoring Clerk `publicMetadata.role`, so Clerk admin users were displayed as students.
 - Fix: server-side role resolution now reads the live Clerk `currentUser().publicMetadata.role` using the installed Clerk SDK. `admin` resolves to `admin`; missing or invalid values safely resolve to `student`.
 - Admin layouts and server actions continue to use `requireRole(["admin"])`; client-provided roles and stale session claims are not trusted.
+- Temporary role diagnostics were removed after verification; production logs do not expose Clerk identifiers or metadata.
 
 ### 2.6 Testing & Verification
 - **Automated Test Suite:** 16 passing tests in `test/prisma-system.test.ts` covering user sync, booking window validation, duplicate booking prevention, opaque QR generation, atomic food collection, double-collection rejection, and delivery state transitions.

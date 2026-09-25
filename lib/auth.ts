@@ -23,12 +23,6 @@ export async function getCurrentUserRole(): Promise<UserRole | null> {
     const publicMetadataRole = clerkUser?.publicMetadata?.role;
     const resolvedRole = resolveRoleFromPublicMetadata(publicMetadataRole);
 
-    console.info("[auth] Clerk role resolution", {
-      clerkUserId: userId,
-      publicMetadataRole,
-      resolvedRole,
-    });
-
     return resolvedRole;
   } catch {
     console.error("Error resolving authenticated user role.");

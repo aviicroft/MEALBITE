@@ -182,8 +182,9 @@ npm start
    - `NEXT_PUBLIC_CLERK_AFTER_SIGN_UP_URL=/student/dashboard`
 3. Use production Clerk keys (`pk_live_...` and `sk_live_...`) in Vercel, not the local development keys. Add the Vercel deployment URL to Clerk's allowed origins/redirect settings.
 4. Set the administrator's Clerk public metadata to `{ "role": "admin" }`. The application reads this value from Clerk's server-side user object; missing or invalid values resolve to `student`.
-5. Set `DATABASE_URL` to a persistent hosted database URL before production use. The current SQLite file configuration (`file:./dev.db`) is local filesystem storage and is not persistent across Vercel deployments/functions.
-6. Deploy after `npm install`, `npx prisma generate`, and `npm run build` pass locally.
+5. Verify the deployed application is using the same Clerk Production instance where the user exists and where the metadata is set. A local `pk_test_...` key and a Vercel `pk_live_...` key address different Clerk instances, even for the same email address.
+6. Set `DATABASE_URL` to a persistent hosted database URL before production use. The current SQLite file configuration (`file:./dev.db`) is local filesystem storage and is not persistent across Vercel deployments/functions.
+7. Deploy after `npm install`, `npx prisma generate`, and `npm run build` pass locally.
 
 ### SQLite production limitation
 
